@@ -76,7 +76,7 @@ fun TrimEditor(
             else if (mediaPath != null) player.setDataSource(mediaPath)
             else return@LaunchedEffect
             player.prepare()
-            val d = try { player.duration } catch (_: Exception) { 0 }
+            val d = try { player.duration.toLong() } catch (_: Exception) { 0L }
             if (d > 0) {
                 durSec = d / 1000f
                 onActualDurationMs(d)
