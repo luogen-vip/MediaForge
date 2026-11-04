@@ -265,17 +265,20 @@ object InpaintEngine {
         val mskTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(msk), longArrayOf(1, 1, S, S))
         val out512: Bitmap = try {
             session.run(mapOf(imageInputName to imgTensor, maskInputName to mskTensor)).use { res ->
-                val o = (res.get(0).value as Array<Array<Array<FloatArray>>>)[0]
+                val tensor = res.get(0) as OnnxTensor
+                val fb = tensor.floatBuffer
                 val ob = Bitmap.createBitmap(si, si, Bitmap.Config.ARGB_8888)
-                // 输出可能为 0..1 或 0..255，动态判断
+                // 输出可能为 0..1 或 0..255，动态判断（NCHW 布局，通道在前）
                 var maxV = 0f
-                for (ch in 0 until 3) for (i in 0 until area step 37) { val v = o[ch][i]; if (v > maxV) maxV = v }
+                for (ch in 0 until 3) for (i in 0 until area) {
+                    val v = fb.get(ch * area + i); if (v > maxV) maxV = v
+                }
                 val scale = if (maxV <= 1.5f) 255f else 1f
                 val opx = IntArray(area)
                 for (i in 0 until area) {
-                    val r = (o[0][i] * scale).toInt().coerceIn(0, 255)
-                    val g = (o[1][i] * scale).toInt().coerceIn(0, 255)
-                    val b = (o[2][i] * scale).toInt().coerceIn(0, 255)
+                    val r = (fb.get(i) * scale).toInt().coerceIn(0, 255)
+                    val g = (fb.get(area + i) * scale).toInt().coerceIn(0, 255)
+                    val b = (fb.get(2 * area + i) * scale).toInt().coerceIn(0, 255)
                     opx[i] = -0x1000000 or (r shl 16) or (g shl 8) or b
                 }
                 ob.setPixels(opx, 0, si, 0, 0, si, si)

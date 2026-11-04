@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.logan.mediaforge.core.FileSniffer
+import com.logan.mediaforge.core.ImageEngine
 import com.logan.mediaforge.core.InpaintEngine
 import com.logan.mediaforge.core.TaskRepository
 import com.logan.mediaforge.core.fmtBytes
