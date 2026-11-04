@@ -20,11 +20,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.logan.mediaforge.core.FileSniffer
 import com.logan.mediaforge.core.Detection
+import com.logan.mediaforge.core.ImageEngine
+import com.logan.mediaforge.core.MediaInfo
+import com.logan.mediaforge.core.MediaProbe
+import com.logan.mediaforge.core.channelLayoutCn
 import com.logan.mediaforge.core.fmtBytes
+import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.InfoRow
 import com.logan.mediaforge.ui.SectionCard
 import kotlinx.coroutines.Dispatchers
@@ -33,12 +40,14 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun DetectScreen() {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var uri by remember { mutableStateOf<Uri?>(null) }
     var name by remember { mutableStateOf("") }
     var size by remember { mutableStateOf(0L) }
     var det by remember { mutableStateOf<Detection?>(null) }
+    var mediaInfo by remember { mutableStateOf<MediaInfo?>(null) }
+    var imgSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { u ->
         if (u == null) return@rememberLauncherForActivityResult
@@ -55,10 +64,21 @@ fun DetectScreen() {
             val d = withContext(Dispatchers.IO) {
                 FileSniffer.detect(resolver, u, n.substringAfterLast('.', ""))
             }
+            val mi = withContext(Dispatchers.IO) {
+                if (d?.category == "AUDIO" || d?.category == "VIDEO") {
+                    val saf = FFmpegKitConfig.getSafParameterForRead(context, u)
+                    if (saf != null) MediaProbe.probe(saf) else null
+                } else null
+            }
+            val isz = withContext(Dispatchers.IO) {
+                if (d?.category == "IMAGE") ImageEngine.decodeSize(context, u) else null
+            }
             uri = u
             name = n
             size = FileSniffer.querySize(resolver, u)
             det = d
+            mediaInfo = mi
+            imgSize = isz
         }
     }
 
@@ -67,7 +87,7 @@ fun DetectScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("文件真实格式识别", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("读取文件「魔数」识别真实格式，不被后缀欺骗。可识别被改名、伪造后缀、截断损坏的文件。",
+        Text("读取文件「魔数」识别真实格式，不被后缀欺骗；音频/视频/图片还能进一步解析出比特率、采样率、声道、分辨率等全部信息。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Button(onClick = { pick.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
@@ -102,6 +122,31 @@ fun DetectScreen() {
                     else -> "其他"
                 })
                 InfoRow("文件大小", if (size > 0) fmtBytes(size) else "未知")
+            }
+
+            // 媒体详情：能识别出来的信息全部显示
+            val mi = mediaInfo
+            val isz = imgSize
+            if (mi != null) {
+                SectionCard("媒体详情", "由 FFprobe 真实解析") {
+                    if (mi.durationMs > 0) InfoRow("时长", fmtMs(mi.durationMs))
+                    if (mi.bitrateKbps != null && mi.bitrateKbps > 0) InfoRow("总比特率", "${mi.bitrateKbps} kbps")
+                    if (mi.formatName.isNotEmpty()) InfoRow("容器", mi.formatName)
+                    if (mi.videoCodec != null) {
+                        InfoRow("视频编码", mi.videoCodec!!)
+                        if (mi.width != null && mi.height != null) InfoRow("视频分辨率", "${mi.width}×${mi.height}")
+                    }
+                    if (mi.audioCodec != null) {
+                        InfoRow("音频编码", mi.audioCodec!!)
+                        InfoRow("采样率", if (mi.sampleRate != null) "${mi.sampleRate} Hz" else "未知")
+                        InfoRow("声道", channelLayoutCn(mi.channelLayout))
+                    }
+                }
+            } else if (isz != null) {
+                SectionCard("图片详情", "真实解析") {
+                    InfoRow("分辨率", "${isz.first}×${isz.second}")
+                    InfoRow("像素总量", fmtBytes(isz.first.toLong() * isz.second))
+                }
             }
         }
     }

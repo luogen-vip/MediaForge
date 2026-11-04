@@ -21,7 +21,9 @@ object MediaProbe {
         return try {
             val session = FFprobeKit.getMediaInformation(path) ?: return null
             val mi = session.mediaInformation ?: return null
-            val durationMs = mi.duration?.toDoubleOrNull()?.toLong() ?: 0L
+            // duration 为秒（浮点字符串），转换为毫秒
+            val d = mi.duration?.toDoubleOrNull() ?: 0.0
+            val durationMs = if (d > 0) (d * 1000).toLong() else 0L
             var vc: String? = null
             var w: Int? = null
             var h: Int? = null

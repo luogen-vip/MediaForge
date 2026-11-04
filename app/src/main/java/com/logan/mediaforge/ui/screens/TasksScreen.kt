@@ -23,9 +23,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,17 +49,7 @@ import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.AudioPlayer
 import com.logan.mediaforge.ui.StatusText
 import com.logan.mediaforge.ui.VideoPreview
-import java.io.File
 
-private fun statusLabel(s: TaskStatus): String = when (s) {
-    TaskStatus.IMPORTING -> "导入中"
-    TaskStatus.RUNNING -> "进行中"
-    TaskStatus.COMPLETED -> "已完成"
-    TaskStatus.FAILED -> "失败"
-    TaskStatus.CANCELED -> "已取消"
-}
-
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TasksScreen() {
     val context = LocalContext.current
@@ -69,7 +61,7 @@ fun TasksScreen() {
     var confirmDelete by remember { mutableStateOf<ConvertTask?>(null) }
     var pendingPermDownload by remember { mutableStateOf<Long?>(null) }
 
-    fun onDownloadResult(id: Long, msg: String) {
+    fun onResult(msg: String) {
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     }
 
@@ -77,7 +69,7 @@ fun TasksScreen() {
         val id = pendingPermDownload
         pendingPermDownload = null
         if (granted && id != null) {
-            TaskRepository.download(id) { onDownloadResult(id, it) }
+            TaskRepository.download(id) { onResult(it) }
         } else if (id != null) {
             Toast.makeText(context, "未授予存储权限，无法保存", Toast.LENGTH_SHORT).show()
         }
@@ -91,12 +83,12 @@ fun TasksScreen() {
             permLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             return
         }
-        TaskRepository.download(id) { onDownloadResult(id, it) }
+        TaskRepository.download(id) { onResult(it) }
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("转换任务", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("多任务并发 · 真实进度 · 点击播放预览 · 下载到「下载/MediaForge」",
+        Text("多任务并发 · 真实进度 · 转换完成的音频可直接播放 · 下载到「下载/MediaForge」",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (tasks.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(top = 60.dp)) {
@@ -109,8 +101,8 @@ fun TasksScreen() {
                 items(tasks, key = { it.id }) { t ->
                     TaskCard(
                         t = t,
-                        playerVisible = showPlayerFor == t.id,
-                        onTogglePlay = {
+                        videoPlayerVisible = showPlayerFor == t.id,
+                        onToggleVideo = {
                             showPlayerFor = if (showPlayerFor == t.id) null else t.id
                         },
                         onDownload = { startDownload(t.id) },
@@ -142,9 +134,7 @@ fun TasksScreen() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    TaskRepository.rename(t.id, name) { msg ->
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    }
+                    TaskRepository.rename(t.id, name) { msg -> onResult(msg) }
                     renameFor = null
                 }) { Text("确定") }
             },
@@ -152,8 +142,12 @@ fun TasksScreen() {
         )
     }
 
-    // 裁剪对话框
+    // 裁剪对话框（滑块选择区间，直观可见）
     trimFor?.let { t ->
+        val durSec = (t.durationMs / 1000f).coerceAtLeast(0f)
+        var range by remember(t.id) {
+            mutableStateOf(if (durSec > 0f) 0f..durSec else 0f..1f)
+        }
         var startText by remember(t.id) { mutableStateOf("") }
         var endText by remember(t.id) { mutableStateOf("") }
         AlertDialog(
@@ -161,19 +155,39 @@ fun TasksScreen() {
             title = { Text("裁剪音频") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("输入开始/结束时间（秒数如 12.5，或 mm:ss 如 1:05），将生成新的裁剪任务，不影响原文件。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedTextField(value = startText, onValueChange = { startText = it },
-                        label = { Text("开始（秒 / mm:ss）") }, singleLine = true)
-                    OutlinedTextField(value = endText, onValueChange = { endText = it },
-                        label = { Text("结束（秒 / mm:ss）") }, singleLine = true)
+                    if (durSec > 0f) {
+                        Text("拖动两端滑块选择保留区间：",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        RangeSlider(
+                            value = range,
+                            onValueChange = {
+                                range = it
+                                startText = String.format(java.util.Locale.US, "%.1f", it.start)
+                                endText = String.format(java.util.Locale.US, "%.1f", it.endInclusive)
+                            },
+                            valueRange = 0f..durSec
+                        )
+                        Text(
+                            "从 ${fmtMs((range.start * 1000).toLong())} 到 ${fmtMs((range.endInclusive * 1000).toLong())}，保留 ${fmtMs(((range.endInclusive - range.start) * 1000).toLong())}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text("完整时长：${fmtMs(t.durationMs)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        OutlinedTextField(value = startText, onValueChange = { startText = it },
+                            label = { Text("开始（秒 / mm:ss）") }, singleLine = true)
+                        OutlinedTextField(value = endText, onValueChange = { endText = it },
+                            label = { Text("结束（秒 / mm:ss）") }, singleLine = true)
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val s = parseTimeSec(startText)
-                    val e = parseTimeSec(endText)
+                    val s = if (durSec > 0f) range.start.toDouble() else parseTimeSec(startText)
+                    val e = if (durSec > 0f) range.endInclusive.toDouble() else parseTimeSec(endText)
                     if (s == null || e == null || e <= s) {
                         Toast.makeText(context, "时间无效：结束必须大于开始", Toast.LENGTH_SHORT).show()
                     } else {
@@ -190,14 +204,28 @@ fun TasksScreen() {
         )
     }
 
-    // 删除确认
+    // 删除确认（可选同时删除已下载副本）
     confirmDelete?.let { t ->
+        var alsoDeleteDownloaded by remember(t.id) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
             title = { Text("删除任务") },
-            text = { Text("将删除任务记录与转换结果文件（已下载到系统文件夹的副本不受影响）。") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("将删除任务记录与转换结果文件。")
+                    if (t.downloadedUri != null) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Checkbox(checked = alsoDeleteDownloaded, onCheckedChange = { alsoDeleteDownloaded = it })
+                            Text("同时删除已下载到系统文件夹的副本", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { TaskRepository.delete(t.id); confirmDelete = null }) { Text("删除") }
+                TextButton(onClick = {
+                    TaskRepository.delete(t.id, alsoDeleteDownloaded)
+                    confirmDelete = null
+                }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("取消") } }
         )
@@ -222,8 +250,8 @@ private fun parseTimeSec(s: String): Double? {
 @Composable
 private fun TaskCard(
     t: ConvertTask,
-    playerVisible: Boolean,
-    onTogglePlay: () -> Unit,
+    videoPlayerVisible: Boolean,
+    onToggleVideo: () -> Unit,
     onDownload: () -> Unit,
     onRename: () -> Unit,
     onTrim: () -> Unit,
@@ -275,7 +303,11 @@ private fun TaskCard(
 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (t.status == TaskStatus.COMPLETED && t.output != null) {
-                    AssistChip(onClick = onTogglePlay, label = { Text(if (playerVisible) "收起播放" else "播放") })
+                    // 只有视频转换才需要「播放」展开按钮；音频的播放条常显在下方；图片没有播放
+                    if (t.kind == TaskKind.VIDEO) {
+                        AssistChip(onClick = onToggleVideo,
+                            label = { Text(if (videoPlayerVisible) "收起播放" else "播放") })
+                    }
                     AssistChip(onClick = onDownload, label = { Text("下载") })
                     AssistChip(onClick = onRename, label = { Text("重命名") })
                     if (t.kind == TaskKind.MEDIA || t.kind == TaskKind.TRIM) {
@@ -288,12 +320,17 @@ private fun TaskCard(
                 AssistChip(onClick = onDelete, label = { Text("删除") })
             }
 
-            if (playerVisible && t.status == TaskStatus.COMPLETED && t.output != null) {
-                if (t.kind == TaskKind.VIDEO) {
-                    VideoPreview(Uri.fromFile(t.output), Modifier.fillMaxWidth().height(200.dp))
-                } else {
-                    AudioPlayer(mediaPath = t.output.absolutePath)
-                }
+            // 音频转换结果：播放条常显，点左侧播放键直接播放
+            if (t.status == TaskStatus.COMPLETED && t.output != null &&
+                (t.kind == TaskKind.MEDIA || t.kind == TaskKind.TRIM)
+            ) {
+                AudioPlayer(mediaPath = t.output.absolutePath)
+            }
+            // 视频转换结果：点击「播放」展开并自动播放
+            if (videoPlayerVisible && t.status == TaskStatus.COMPLETED &&
+                t.kind == TaskKind.VIDEO && t.output != null
+            ) {
+                VideoPreview(Uri.fromFile(t.output), Modifier.fillMaxWidth().height(200.dp))
             }
         }
     }

@@ -277,3 +277,25 @@ object Presets {
         return w
     }
 }
+
+/** 声道布局转中文显示 */
+fun channelLayoutCn(v: String?): String = when (v?.lowercase()) {
+    null, "" -> "未知"
+    "mono" -> "单声道"
+    "stereo" -> "立体声"
+    "2 channels" -> "立体声"
+    "1 channels" -> "单声道"
+    "5.1" -> "5.1 环绕声"
+    "5.1(side)" -> "5.1 环绕声"
+    "7.1" -> "7.1 环绕声"
+    else -> v
+}
+
+/** 视频编码速度档位中文说明 */
+val SPEED_LABELS = linkedMapOf(
+    "ultrafast" to "极快（体积较大）",
+    "veryfast" to "很快",
+    "medium" to "均衡（推荐）",
+    "slow" to "较慢（更清晰）",
+    "veryslow" to "极慢（最清晰）"
+)

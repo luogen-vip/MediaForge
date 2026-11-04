@@ -2,6 +2,7 @@ package com.logan.mediaforge.core
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegSession
 import com.arthenica.ffmpegkit.ReturnCode
@@ -15,11 +16,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
@@ -62,9 +66,94 @@ object TaskRepository {
 
     private lateinit var appContext: Context
     private val counter = AtomicLong(1)
+    private val persistPending = AtomicBoolean(false)
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        restore()
+    }
+
+    // ==================== 任务持久化（杀掉 APP 后保留历史任务） ====================
+
+    private fun prefs() = appContext.getSharedPreferences("mediaforge_tasks", Context.MODE_PRIVATE)
+
+    private fun persist() {
+        if (!persistPending.compareAndSet(false, true)) return
+        scope.launch(Dispatchers.IO) {
+            try { Thread.sleep(500) } catch (_: InterruptedException) { }
+            persistPending.set(false)
+            try {
+                val arr = JSONArray()
+                _tasks.value.forEach { t ->
+                    arr.put(JSONObject().apply {
+                        put("id", t.id)
+                        put("kind", t.kind.name)
+                        put("typeName", t.typeName)
+                        put("sourceName", t.sourceName)
+                        put("sourceReal", t.sourceReal)
+                        put("fromExt", t.fromExt)
+                        put("toExt", t.toExt)
+                        put("detail", t.detail)
+                        put("status", t.status.name)
+                        put("phase", t.phase)
+                        put("progress", t.progress.toDouble())
+                        put("output", t.output?.absolutePath ?: "")
+                        put("outputInfo", t.outputInfo)
+                        put("durationMs", t.durationMs)
+                        put("error", t.error ?: "")
+                        put("downloadedName", t.downloadedName ?: "")
+                        put("downloadedUri", t.downloadedUri?.toString() ?: "")
+                        put("createdAt", t.createdAt)
+                    })
+                }
+                prefs().edit().putString("tasks", arr.toString()).apply()
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun restore() {
+        try {
+            val s = prefs().getString("tasks", null) ?: return
+            val arr = JSONArray(s)
+            val list = mutableListOf<ConvertTask>()
+            var maxId = 0L
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val id = o.getLong("id")
+                maxId = maxOf(maxId, id)
+                val savedStatus = try { TaskStatus.valueOf(o.optString("status", "FAILED")) } catch (_: Exception) { TaskStatus.FAILED }
+                val kind = try { TaskKind.valueOf(o.optString("kind", "MEDIA")) } catch (_: Exception) { TaskKind.MEDIA }
+                // 上次退出时还在进行的任务标记为中断失败，其余原样保留
+                val interrupted = savedStatus == TaskStatus.RUNNING || savedStatus == TaskStatus.IMPORTING
+                val status = if (interrupted) TaskStatus.FAILED else savedStatus
+                val outPath = o.optString("output", "")
+                val out = if (outPath.isNotEmpty()) File(outPath) else null
+                list.add(
+                    ConvertTask(
+                        id = id,
+                        kind = kind,
+                        typeName = o.optString("typeName", "转换任务"),
+                        sourceName = o.optString("sourceName", ""),
+                        sourceReal = o.optString("sourceReal", ""),
+                        fromExt = o.optString("fromExt", ""),
+                        toExt = o.optString("toExt", ""),
+                        detail = o.optString("detail", ""),
+                        status = status,
+                        phase = if (interrupted) "中断" else o.optString("phase", ""),
+                        progress = if (interrupted) 0f else o.optDouble("progress", 0.0).toFloat(),
+                        output = out,
+                        outputInfo = o.optString("outputInfo", ""),
+                        durationMs = o.optLong("durationMs", 0L),
+                        error = if (interrupted) "应用被关闭，任务中断" else o.optString("error", "").ifEmpty { null },
+                        downloadedName = o.optString("downloadedName", "").ifEmpty { null },
+                        downloadedUri = o.optString("downloadedUri", "").ifEmpty { null }?.let { Uri.parse(it) },
+                        createdAt = o.optLong("createdAt", 0L)
+                    )
+                )
+            }
+            counter.set(maxId + 1)
+            _tasks.value = list
+        } catch (_: Exception) { }
     }
 
     val outputsDir: File
@@ -75,10 +164,12 @@ object TaskRepository {
 
     fun update(id: Long, transform: (ConvertTask) -> ConvertTask) {
         _tasks.update { list -> list.map { if (it.id == id) transform(it) else it } }
+        persist()
     }
 
     private fun add(task: ConvertTask) {
         _tasks.update { it + task }
+        persist()
     }
 
     fun uniqueOut(ext: String): File {
@@ -370,11 +461,23 @@ object TaskRepository {
         t.sessionId?.let { sid -> try { FFmpegKit.cancel(sid) } catch (_: Exception) { } }
     }
 
-    fun delete(id: Long) {
+    fun delete(id: Long, alsoDeleteDownloaded: Boolean = false) {
         val t = _tasks.value.firstOrNull { it.id == id } ?: return
         if (t.status == TaskStatus.RUNNING || t.status == TaskStatus.IMPORTING) cancel(id)
         try { t.output?.delete() } catch (_: Exception) { }
+        if (alsoDeleteDownloaded && t.downloadedUri != null) {
+            try {
+                if (t.downloadedUri!!.scheme == "file") {
+                    File(t.downloadedUri!!.path ?: "").delete()
+                } else if (t.downloadedUri!!.authority == "media") {
+                    appContext.contentResolver.delete(t.downloadedUri!!, null, null)
+                } else {
+                    DocumentsContract.deleteDocument(appContext.contentResolver, t.downloadedUri!!)
+                }
+            } catch (_: Exception) { }
+        }
         _tasks.update { it.filterNot { x -> x.id == id } }
+        persist()
     }
 
     fun download(id: Long, onResult: (String) -> Unit) {

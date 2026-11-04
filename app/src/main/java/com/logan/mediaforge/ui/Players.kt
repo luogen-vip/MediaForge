@@ -31,9 +31,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.logan.mediaforge.core.fmtMs
 import kotlinx.coroutines.delay
 
-/** 音频播放条：支持本地文件路径或 content Uri，真实播放 */
+/** 音频播放条：支持本地文件路径或 content Uri，真实播放；autoPlay=true 时准备好后自动开始 */
 @Composable
-fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, modifier: Modifier = Modifier) {
+fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Boolean = false, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var playing by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     var pos by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
@@ -55,6 +55,14 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, modifier: Modi
     }
     DisposableEffect(mediaPath, mediaUri) {
         onDispose { try { player.release() } catch (_: Exception) { } }
+    }
+    LaunchedEffect(ready, autoPlay) {
+        if (ready && autoPlay) {
+            try {
+                player.start()
+                playing = true
+            } catch (_: Exception) { }
+        }
     }
     LaunchedEffect(playing) {
         while (playing) {
