@@ -12,8 +12,8 @@ android {
         applicationId = "com.logan.mediaforge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.2.2"
+        versionCode = 6
+        versionName = "1.3.0"
     }
 
     buildTypes {
@@ -52,6 +52,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("androidx.navigation:navigation-compose:2.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // ONNX Runtime：运行内置 LaMa 去水印模型（完全离线推理）
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
     // FFmpegKit 社区维护版（官方 API 兼容的替代包），包含全部音频/视频编码器（x264/x265/lame/opus/amr 等）
     implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:7.1.7")
 }

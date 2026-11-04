@@ -26,6 +26,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Prepare LaMa inpainting model (download + int8 quantize + verify)
+        run: |
+          pip install --quiet onnxruntime onnx
+          python scripts/prepare_model.py
+
       - name: Build APK
         run: gradle assembleRelease --no-daemon --stacktrace
 
@@ -39,18 +44,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.2.2.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.2.2.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.0.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.3.0.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.2.2.apk
+          path: MediaForge-v1.3.0.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.2.2 || gh release create v1.2.2 --title "MediaForge v1.2.2" --notes "v1.2.2 稳定性重点修复（用户反馈）：① 修复图片分辨率页花屏闪退——此前输入/删除分辨率时预览区比例会瞬间变成极端值，撑爆渲染层导致整屏竖条花屏并闪退；现预览改为固定高度容器内等比缩放居中，任何输入都不会撑爆布局。② 修复分辨率输入框位置乱跳——预览区高度不再随输入变化，输入框固定在原位，删完字也不用重新找输入框。③ 新增分辨率上限校验（单边最大32767像素、总像素8000万），超限给出明确提示，转换引擎增加内存不足保护，避免崩溃。作者：罗根"
-          gh release upload v1.2.2 MediaForge-v1.2.2.apk --clobber
+          gh release view v1.3.0 || gh release create v1.3.0 --title "MediaForge v1.3.0" --notes "v1.3.0 全新功能：图片去水印（完全离线，不依赖服务器）——新增「去水印」页，支持两种标记方式：① 框选去水印：拖动拉出矩形框住水印；② 涂抹去水印：像画笔一样直接涂抹，笔刷大小可调，支持撤销与清空。内置 LaMa 深度学习修复模型（开源 Apache-2.0，构建时自动 int8 量化打包），根据周围画面智能补全被去除的区域，与整张图自然融合、不突兀；若设备内存不足或模型缺失，自动切换内置多尺度智能填充算法，保证功能永不崩溃。去水印任务与转换任务显示在同一任务列表，真实进度、可下载（无损 PNG）、可重命名。上一版任务排序/时间显示/删除勾选项等优化全部保留。作者：罗根"
+          gh release upload v1.3.0 MediaForge-v1.3.0.apk --clobber

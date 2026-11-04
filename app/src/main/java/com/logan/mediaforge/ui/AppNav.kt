@@ -2,6 +2,7 @@ package com.logan.mediaforge.ui
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
@@ -25,6 +26,7 @@ import com.logan.mediaforge.ui.screens.ConvertScreen
 import com.logan.mediaforge.ui.screens.DetectScreen
 import com.logan.mediaforge.ui.screens.ImageScreen
 import com.logan.mediaforge.ui.screens.TasksScreen
+import com.logan.mediaforge.ui.screens.WatermarkScreen
 
 private data class TabItem(val label: String, val icon: ImageVector, val route: String)
 
@@ -35,6 +37,7 @@ fun AppNav() {
         TabItem("转换", Icons.Filled.SwapHoriz, "convert"),
         TabItem("任务", Icons.Filled.TaskAlt, "tasks"),
         TabItem("图片", Icons.Filled.Image, "image"),
+        TabItem("去水印", Icons.Filled.Brush, "inpaint"),
         TabItem("识别", Icons.Filled.Search, "detect"),
         TabItem("关于", Icons.Filled.Info, "about")
     )
@@ -62,6 +65,7 @@ fun AppNav() {
             composable("convert") { ConvertScreen() }
             composable("tasks") { TasksScreen() }
             composable("image") { ImageScreen() }
+            composable("inpaint") { WatermarkScreen() }
             composable("detect") { DetectScreen() }
             composable("about") { AboutScreen() }
         }

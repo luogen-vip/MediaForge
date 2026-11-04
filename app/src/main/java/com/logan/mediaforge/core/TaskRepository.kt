@@ -1,6 +1,8 @@
 package com.logan.mediaforge.core
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.arthenica.ffmpegkit.FFmpegKit
@@ -345,6 +347,98 @@ object TaskRepository {
                 fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
             }
         }
+    }
+
+    // ==================== 图片去水印（LaMa AI / 内置算法，完全离线） ====================
+
+    fun startInpaint(
+        uri: Uri, displayName: String,
+        rects: List<InpaintEngine.BoxRect>, strokes: List<InpaintEngine.Stroke>
+    ) {
+        val id = counter.getAndIncrement()
+        val hasModel = InpaintEngine.modelAvailable(appContext)
+        val engineName = if (hasModel) "LaMa AI 模型" else "内置智能填充"
+        add(
+            ConvertTask(
+                id = id, kind = TaskKind.IMAGE, typeName = "图片去水印",
+                sourceName = displayName, sourceReal = "",
+                fromExt = displayName.substringAfterLast('.', "?"), toExt = "png",
+                detail = "框选×${rects.size} · 涂抹×${strokes.size} · 引擎：$engineName",
+                status = TaskStatus.IMPORTING, phase = "导入源图片", progress = 0f
+            )
+        )
+        scope.launch {
+            var result: Bitmap? = null
+            try {
+                val src = importUri(id, uri, displayName)
+                if (isCanceled(id)) return@launch
+                if (src == null || !src.exists() || src.length() == 0L) {
+                    fail(id, "导入源图片失败（文件不可读或为空）")
+                    return@launch
+                }
+                update(id) { if (it.status == TaskStatus.IMPORTING) it.copy(status = TaskStatus.RUNNING, phase = "解码图片", progress = 0.03f) else it }
+                val bmp = decodeBitmapCapped(src, 20_000_000L)
+                if (bmp == null) {
+                    fail(id, "图片解码失败（文件可能已损坏或不是可识别的图片）")
+                    return@launch
+                }
+                val det = FileSniffer.detect(src)
+                update(id) {
+                    it.copy(sourceReal = det?.realName ?: "未知", phase = "修复中")
+                }
+                result = InpaintEngine.inpaint(appContext, bmp, rects, strokes) { p, ph ->
+                    update(id) {
+                        if (it.status == TaskStatus.RUNNING) it.copy(progress = p.coerceIn(0.05f, 0.95f), phase = ph) else it
+                    }
+                }
+                bmp.recycle()
+                if (isCanceled(id)) return@launch
+                if (result == null) {
+                    fail(id, "去水印失败：未指定有效区域或引擎异常，请重新框选/涂抹后重试")
+                    return@launch
+                }
+                update(id) { it.copy(phase = "保存结果", progress = 0.97f) }
+                val out = uniqueOut("png")
+                val ok = out.outputStream().use { fos -> result!!.compress(Bitmap.CompressFormat.PNG, 100, fos) }
+                if (!ok || !out.exists() || out.length() == 0L) {
+                    fail(id, "保存结果失败")
+                    return@launch
+                }
+                val det2 = FileSniffer.detect(out)
+                if (det2 == null || det2.realExt != "png") {
+                    fail(id, "输出校验失败：实际格式为 ${det2?.realName ?: "未知"}")
+                    return@launch
+                }
+                update(id) {
+                    it.copy(
+                        status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
+                        output = out,
+                        outputInfo = "${result!!.width}×${result!!.height} · " + fmtBytes(out.length())
+                    )
+                }
+            } catch (e: OutOfMemoryError) {
+                fail(id, "内存不足：图片过大或区域过大，请稍后重试")
+            } catch (e: Exception) {
+                fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
+            } finally {
+                result?.recycle()
+            }
+        }
+    }
+
+    /** 解码图片，超过 maxPixels 时按倍数降采样防 OOM */
+    private fun decodeBitmapCapped(f: File, maxPixels: Long): Bitmap? = try {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, opts)
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) null
+        else {
+            var sample = 1
+            while (opts.outWidth.toLong() * opts.outHeight / (sample.toLong() * sample) > maxPixels) sample *= 2
+            val o2 = BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.decodeFile(f.absolutePath, o2)
+        }
+    } catch (e: Exception) {
+        null
     }
 
     // ==================== 裁剪 ====================
