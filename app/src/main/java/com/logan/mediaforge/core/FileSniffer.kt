@@ -42,18 +42,24 @@ object FileSniffer {
         return try {
             val size = querySize(resolver, uri)
             val head = ByteArray(8192)
-            val tail = ByteArray(2048)
+            // 尾部读 64KB：ZIP 容器（APK/JAR/DOCX/XLSX…）的中央目录在文件末尾，
+            // 所有条目名都明文存在中央目录里，扫尾部才能可靠区分容器类型
+            val tail = ByteArray(65536)
             var hlen = 0
             var tlen = 0
             resolver.openInputStream(uri)?.use { ins ->
                 hlen = readUpTo(ins, head)
                 if (size > head.size.toLong()) {
-                    val skip = size - tail.size
-                    var skipped = 0L
-                    while (skipped < skip) {
-                        val s = ins.skip(skip - skipped)
-                        if (s <= 0) break
-                        skipped += s
+                    // 注意：当前位置已在 hlen，目标位置是 size - tail.size（读到文件末尾为止），
+                    // 旧版少扣了已读的 hlen 导致 skip 越过 EOF、尾部永远读不到
+                    val target = size - tail.size
+                    var skipped = hlen.toLong()
+                    if (target > skipped) {
+                        while (skipped < target) {
+                            val s = ins.skip(target - skipped)
+                            if (s <= 0) break
+                            skipped += s
+                        }
                     }
                     tlen = readUpTo(ins, tail)
                 }
@@ -68,14 +74,20 @@ object FileSniffer {
         return try {
             val size = file.length()
             val head = ByteArray(8192)
-            val tail = ByteArray(2048)
+            val tail = ByteArray(65536)
             var hlen = 0
             var tlen = 0
             FileInputStream(file).use { ins -> hlen = readUpTo(ins, head) }
             if (size > head.size.toLong()) {
                 RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(size - tail.size)
-                    tlen = raf.read(tail)
+                    raf.seek(maxOf(head.size.toLong(), size - tail.size))
+                    var off = 0
+                    while (off < tail.size) {
+                        val r = raf.read(tail, off, tail.size - off)
+                        if (r <= 0) break
+                        off += r
+                    }
+                    tlen = off
                 }
             }
             analyze(head, hlen, tail, tlen.coerceAtLeast(0), size, declaredExt)
@@ -143,14 +155,21 @@ object FileSniffer {
         }
 
         // ---------- 压缩包 / 文档容器 ----------
+        // ZIP 是个容器家族：APK/JAR/EPUB/DOCX/XLSX/PPTX 本质都是 ZIP。
+        // 判定规则：优先找容器特有特征（头部的 mimetype/首条目，或末尾中央目录里的条目名），
+        // 找到真实特征就报真实类型（如 APK）；一个特征都没有才是普通 ZIP。
+        // 这样「真 APK 改了名」和「真 ZIP 改名 .apk」都能给出正确的真实格式。
         if (at(0, 0x50, 0x4B, 0x03, 0x04)) {
+            val isApk = headContains("AndroidManifest.xml") || headContains("classes.dex") ||
+                tailHasStr("AndroidManifest.xml") || tailHasStr("classes.dex")
+            val isJar = headContains("META-INF/MANIFEST.MF") || tailHasStr("META-INF/MANIFEST.MF")
             val (name, ext) = when {
-                headContains("AndroidManifest.xml") || headContains("classes.dex") -> "APK（安卓安装包）" to "apk"
-                headContains("META-INF/MANIFEST.MF") -> "JAR（Java 归档）" to "jar"
+                isApk -> "APK（安卓安装包）" to "apk"
+                isJar -> "JAR（Java 归档）" to "jar"
                 headContains("application/epub+zip") -> "EPUB（电子书）" to "epub"
-                headContains("word/") -> "DOCX（Word 文档）" to "docx"
-                headContains("xl/") -> "XLSX（Excel 表格）" to "xlsx"
-                headContains("ppt/") -> "PPTX（演示文稿）" to "pptx"
+                headContains("word/") || tailHasStr("word/") -> "DOCX（Word 文档）" to "docx"
+                headContains("xl/") || tailHasStr("xl/") -> "XLSX（Excel 表格）" to "xlsx"
+                headContains("ppt/") || tailHasStr("ppt/") -> "PPTX（演示文稿）" to "pptx"
                 else -> "ZIP（压缩包）" to "zip"
             }
             val cor = if (!tailContains(0x50, 0x4B, 0x05, 0x06))

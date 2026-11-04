@@ -2,11 +2,14 @@ package com.logan.mediaforge.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -30,12 +34,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,6 +58,8 @@ import com.logan.mediaforge.ui.AudioPlayer
 import com.logan.mediaforge.ui.StatusText
 import com.logan.mediaforge.ui.TrimEditor
 import com.logan.mediaforge.ui.VideoPreview
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -316,6 +327,11 @@ private fun TaskCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (t.status == TaskStatus.COMPLETED) {
+                // 图片类任务（格式转换 / 去水印）完成后直接展示结果预览图，
+                // 用户先看到效果再决定要不要下载
+                if (t.kind == TaskKind.IMAGE && t.output != null) {
+                    ResultImageThumb(path = t.output!!.absolutePath)
+                }
                 Text(t.outputInfo, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary)
                 if (t.downloadedName != null) {
@@ -360,5 +376,53 @@ private fun TaskCard(
                 VideoPreview(Uri.fromFile(t.output), Modifier.fillMaxWidth().height(200.dp))
             }
         }
+    }
+}
+
+/**
+ * 图片任务结果预览图：后台降采样解码（不卡列表、不吃内存），
+ * 固定高度容器内等比展示，极端比例的图片也不会撑爆布局。
+ */
+@Composable
+private fun ResultImageThumb(path: String) {
+    var bmp by remember(path) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(path) {
+        val b = withContext(Dispatchers.IO) {
+            try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, o)
+                if (o.outWidth <= 0 || o.outHeight <= 0) return@withContext null
+                var sample = 1
+                while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= 480) sample *= 2
+                BitmapFactory.decodeFile(
+                    path,
+                    BitmapFactory.Options().apply { inSampleSize = sample }
+                )
+            } catch (e: OutOfMemoryError) {
+                null
+            } catch (e: Exception) {
+                null
+            }
+        }
+        bmp = b
+    }
+    val b = bmp
+    if (b != null) {
+        Box(
+            Modifier.fillMaxWidth().height(220.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = "转换结果预览图",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+            )
+        }
+        Text(
+            "转换结果预览（满意请点下方「下载」保存）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

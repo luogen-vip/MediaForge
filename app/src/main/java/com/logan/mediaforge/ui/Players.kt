@@ -40,7 +40,16 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     var dur by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var ready by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
-    val player = remember(mediaPath, mediaUri) { MediaPlayer() }
+    val player = remember(mediaPath, mediaUri) {
+        MediaPlayer().apply {
+            // 关键修复：播放自然结束后，按钮要从「暂停(两条杠)」复位为「播放(三角)」，
+            // 进度条停在结尾；再次点播放会从头开始
+            setOnCompletionListener {
+                playing = false
+                pos = dur
+            }
+        }
+    }
 
     LaunchedEffect(mediaPath, mediaUri) {
         try {

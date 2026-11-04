@@ -44,18 +44,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.2.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.3.2.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.3.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.3.3.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.3.2.apk
+          path: MediaForge-v1.3.3.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.3.2 || gh release create v1.3.2 --title "MediaForge v1.3.2" --notes "v1.3.2 稳定性重点修复（用户反馈）：① 修复图片去水印必失败的异常 Immutable bitmap passed to Canvas constructor——框选与涂抹两种方式现在都能正常出结果；② 修复任务页「裁剪」显示旧总时长的问题：任务现在记录转换结果的真实时长，裁剪过再裁剪显示的就是裁剪后的时长；③ 修复再裁剪后无法播放的问题：裁剪区间自动按文件实际时长钳制，杜绝裁出空/坏文件，播放失败时也会明确提示而不是无反应；④ 试听/裁剪编辑器以文件实际时长为准，兼容旧版本任务记录。作者：罗根"
-          gh release upload v1.3.2 MediaForge-v1.3.2.apk --clobber
+          gh release view v1.3.3 || gh release create v1.3.3 --title "MediaForge v1.3.3" --notes "v1.3.3 体验修复（用户反馈）：① 修复音频播放完毕后按钮不复位的问题——播放结束自动变回播放（三角）状态、进度停在结尾，再次点击从头播放，上传预览与转换结果同样生效；② 涂抹去水印笔迹改为平滑连续实心线条（之前是点点点断开的），所见即所得，实际去除区域与涂抹区域完全一致；③ 任务页图片任务（格式转换/去水印）完成后直接显示结果预览图，先看效果再决定是否下载；④ 文件识别增强：APK 不再误报为 ZIP——通过头部与末尾中央目录特征准确区分 APK/JAR/EPUB/DOCX/XLSX/PPTX 与普通 ZIP，真实是 ZIP 就显示 ZIP、真实是 APK 就显示 APK；同时修复 Uri 文件尾部特征读取错误（旧版 skip 计数 bug 导致结尾校验失效）。作者：罗根"
+          gh release upload v1.3.3 MediaForge-v1.3.3.apk --clobber

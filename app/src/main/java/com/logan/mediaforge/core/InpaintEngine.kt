@@ -184,15 +184,38 @@ object InpaintEngine {
             c.drawRect(left, top, right, bottom, p)
             any = true
         }
+        // 涂抹笔画：与 UI 渲染一致 —— 用平滑连续路径 + 圆头描边光栅化，
+        // 保证「屏幕上看到的涂抹区域」与「实际送去修复的蒙版」完全一致，且没有断开的点
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = Color.WHITE
+        }
         for (s in strokes) {
             if (s.pts.isEmpty()) continue
             val half = s.halfWidthFrac.coerceIn(0.001f, 0.2f) * srcW * scale
-            for (pt in s.pts) {
-                val x = toRoiX(pt.first.coerceIn(0f, 1f))
-                val y = toRoiY(pt.second.coerceIn(0f, 1f))
-                if (x + half < 0 || y + half < 0 || x - half > roiW || y - half > roiH) continue
-                c.drawCircle(x, y, half, p)
-                any = true
+            val mapped = s.pts.map { pt ->
+                Pair(toRoiX(pt.first.coerceIn(0f, 1f)), toRoiY(pt.second.coerceIn(0f, 1f)))
+            }
+            // 整笔完全在 ROI 外才跳过
+            if (mapped.all { p ->
+                    p.first + half < 0 || p.second + half < 0 || p.first - half > roiW || p.second - half > roiH
+                }) continue
+            any = true
+            if (mapped.size == 1) {
+                c.drawCircle(mapped[0].first, mapped[0].second, half, p)
+            } else {
+                strokePaint.strokeWidth = half * 2f
+                val path = android.graphics.Path()
+                path.moveTo(mapped[0].first, mapped[0].second)
+                for (i in 1 until mapped.size) {
+                    val mx = (mapped[i - 1].first + mapped[i].first) / 2f
+                    val my = (mapped[i - 1].second + mapped[i].second) / 2f
+                    path.quadTo(mapped[i - 1].first, mapped[i - 1].second, mx, my)
+                }
+                path.lineTo(mapped.last().first, mapped.last().second)
+                c.drawPath(path, strokePaint)
             }
         }
         return if (any) bmp else { bmp.recycle(); null }

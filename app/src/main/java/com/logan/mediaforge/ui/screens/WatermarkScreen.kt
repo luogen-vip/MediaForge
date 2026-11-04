@@ -35,6 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -217,6 +220,9 @@ private enum class DragMode { NEW_BOX, MOVE_BOX, RESIZE_TL, RESIZE_TR, RESIZE_BL
  * 蒙版编辑器：固定高度容器内等比显示图片（Fit）。
  * 框选模式：单框，拖框内移动、拖四角缩放、拖空白处画新框（替换旧框）。
  * 涂抹模式：白色半透明高亮笔刷，像真实涂抹遮罩。
+ *
+ * 笔迹渲染用二次贝塞尔平滑连续路径 + 圆头描边：拖动快慢都不会出现“点点点”的断点，
+ * 显示出来的涂抹区域与实际送去修复的蒙版完全一致。
  */
 @Composable
 private fun MaskEditor(
@@ -432,12 +438,31 @@ private fun MaskEditor(
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrokePath(
     s: InpaintEngine.Stroke, offX: Float, offY: Float, drawW: Float, drawH: Float, color: Color
 ) {
+    if (s.pts.isEmpty()) return
     val halfPx = s.halfWidthFrac * drawW
-    for (p in s.pts) {
+    // 单点：画实心圆；多点：沿点列生成平滑连续路径，圆头圆角描边，不再有断开的“点点点”
+    if (s.pts.size == 1) {
         drawCircle(
             color = color,
             radius = halfPx,
-            center = Offset(offX + p.first * drawW, offY + p.second * drawH)
+            center = Offset(offX + s.pts[0].first * drawW, offY + s.pts[0].second * drawH)
         )
+        return
     }
+    val path = Path()
+    var px = offX + s.pts[0].first * drawW
+    var py = offY + s.pts[0].second * drawH
+    path.moveTo(px, py)
+    for (i in 1 until s.pts.size) {
+        val x = offX + s.pts[i].first * drawW
+        val y = offY + s.pts[i].second * drawH
+        // 二次贝塞尔经过相邻两点中点，折线变圆滑，快速拖动也不会断开
+        path.quadTo(px, py, (px + x) / 2f, (py + y) / 2f)
+        px = x; py = y
+    }
+    path.lineTo(px, py)
+    drawPath(
+        path, color,
+        style = Stroke(width = halfPx * 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
 }
