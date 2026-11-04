@@ -243,7 +243,6 @@ object FileSniffer {
         if (atStr(0, "OTTO")) return det("OTF（字体）", "otf", "font/otf", "OTHER")
         if (atStr(0, "wOFF")) return det("WOFF（网页字体）", "woff", "font/woff", "OTHER")
         if (atStr(0, "wOF2")) return det("WOFF2（网页字体）", "woff2", "font/woff2", "OTHER")
-        if (atStr(0, "Rar!\x1A\x07\x00")) return det("RAR（压缩包）", "rar", "application/vnd.rar", "ARCHIVE")
 
         // ---------- 文本类 ----------
         val text = asText(head, hlen)

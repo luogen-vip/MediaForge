@@ -11,7 +11,7 @@ data class MediaInfo(
     val height: Int?,
     val audioCodec: String?,
     val sampleRate: Int?,
-    val channels: Int?
+    val channelLayout: String?
 )
 
 /** 媒体信息探测（FFprobe 真实解析，不猜后缀） */
@@ -27,19 +27,19 @@ object MediaProbe {
             var h: Int? = null
             var ac: String? = null
             var sr: Int? = null
-            var ch: Int? = null
+            var chLayout: String? = null
             val streams = mi.streams ?: emptyList()
             for (st in streams) {
                 when (st.type) {
                     "video" -> if (vc == null) {
-                        vc = st.codecName
-                        w = st.width
-                        h = st.height
+                        vc = st.codec
+                        w = st.width?.toInt()
+                        h = st.height?.toInt()
                     }
                     "audio" -> if (ac == null) {
-                        ac = st.codecName
+                        ac = st.codec
                         sr = st.sampleRate?.toIntOrNull()
-                        ch = st.channelCount
+                        chLayout = st.channelLayout
                     }
                 }
             }
@@ -48,7 +48,7 @@ object MediaProbe {
                 formatName = mi.format ?: "",
                 bitrateKbps = mi.bitrate?.toDoubleOrNull()?.toLong(),
                 videoCodec = vc, width = w, height = h,
-                audioCodec = ac, sampleRate = sr, channels = ch
+                audioCodec = ac, sampleRate = sr, channelLayout = chLayout
             )
         } catch (e: Exception) {
             null

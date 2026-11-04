@@ -42,7 +42,7 @@ data class ConvertTask(
     val outputInfo: String = "",
     val durationMs: Long = 0,
     val error: String? = null,
-    val sessionId: Int? = null,
+    val sessionId: Long? = null,
     val downloadedName: String? = null,
     val downloadedUri: Uri? = null,
     val createdAt: Long = System.currentTimeMillis()
@@ -120,7 +120,7 @@ object TaskRepository {
                 var src = sourceFile
                 if (src == null && uri != null) src = importUri(id, uri, displayName)
                 if (isCanceled(id)) return@launch
-                if (src == null || !src.exists() || src.length() == 0) {
+                if (src == null || !src.exists() || src.length() == 0L) {
                     fail(id, "导入源文件失败（文件不可读或为空）")
                     return@launch
                 }
@@ -181,7 +181,7 @@ object TaskRepository {
                 var src = sourceFile
                 if (src == null && uri != null) src = importUri(id, uri, displayName)
                 if (isCanceled(id)) return@launch
-                if (src == null || !src.exists() || src.length() == 0) {
+                if (src == null || !src.exists() || src.length() == 0L) {
                     fail(id, "导入源文件失败（文件不可读或为空）")
                     return@launch
                 }
@@ -305,7 +305,7 @@ object TaskRepository {
                 { s -> if (cont.isActive) cont.resume(s) },
                 { },
                 { stats ->
-                    val t = stats.time
+                    val t = stats.time.toLong()
                     if (totalMs > 0 && t > 0) {
                         val p = (t.toDouble() / totalMs).toFloat().coerceIn(0f, 0.99f)
                         update(id) {

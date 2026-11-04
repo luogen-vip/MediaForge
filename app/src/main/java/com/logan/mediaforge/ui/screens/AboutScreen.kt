@@ -41,26 +41,31 @@ fun AboutScreen() {
     val clipboard = LocalClipboardManager.current
     var folderVersion by remember { mutableIntStateOf(0) }
 
-    fun pickFolder(key: String): androidx.activity.compose.ManagedActivityResultLauncher<Uri?, Uri> =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            if (uri != null) {
-                try {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    )
-                    SettingsRepo.setFolder(context, key, uri.toString())
-                    Toast.makeText(context, "保存位置已更新", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(context, "设置失败：${e.message}", Toast.LENGTH_SHORT).show()
-                }
-                folderVersion++
+    fun folderPicked(key: String, uri: Uri?) {
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                SettingsRepo.setFolder(context, key, uri.toString())
+                Toast.makeText(context, "保存位置已更新", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "设置失败：${e.message}", Toast.LENGTH_SHORT).show()
             }
+            folderVersion++
         }
+    }
 
-    val pickAudio = pickFolder(SettingsRepo.CAT_AUDIO)
-    val pickImage = pickFolder(SettingsRepo.CAT_IMAGE)
-    val pickFile = pickFolder(SettingsRepo.CAT_FILE)
+    val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        folderPicked(SettingsRepo.CAT_AUDIO, uri)
+    }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        folderPicked(SettingsRepo.CAT_IMAGE, uri)
+    }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        folderPicked(SettingsRepo.CAT_FILE, uri)
+    }
 
     fun folderDisplay(key: String): String {
         folderVersion // 依赖以便刷新

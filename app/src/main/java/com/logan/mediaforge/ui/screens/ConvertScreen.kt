@@ -257,7 +257,7 @@ fun ConvertScreen() {
                     if (mediaInfo!!.audioCodec != null) {
                         InfoRow("音频编码", mediaInfo!!.audioCodec!!)
                         if (mediaInfo!!.sampleRate != null) InfoRow("采样率", "${mediaInfo!!.sampleRate} Hz")
-                        if (mediaInfo!!.channels != null) InfoRow("声道", "${mediaInfo!!.channels}")
+                        if (mediaInfo!!.channelLayout != null) InfoRow("声道", mediaInfo!!.channelLayout!!)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
