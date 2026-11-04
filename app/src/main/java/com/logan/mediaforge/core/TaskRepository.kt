@@ -323,7 +323,7 @@ object TaskRepository {
         }
 
     private fun verifyAndFinish(id: Long, out: File, verifyKey: String) {
-        if (!out.exists() || out.length() == 0) {
+        if (!out.exists() || out.length() == 0L) {
             fail(id, "输出文件无效")
             return
         }
