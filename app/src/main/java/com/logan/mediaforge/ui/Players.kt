@@ -39,6 +39,7 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     var pos by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var dur by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var ready by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     val player = remember(mediaPath, mediaUri) { MediaPlayer() }
 
     LaunchedEffect(mediaPath, mediaUri) {
@@ -51,6 +52,7 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             ready = true
         } catch (e: Exception) {
             ready = false
+            failed = true
         }
     }
     DisposableEffect(mediaPath, mediaUri) {
@@ -92,19 +94,26 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                 tint = MaterialTheme.colorScheme.primary
             )
         }
-        Text(fmtMs(pos.toLong()), style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Slider(
-            value = if (dur > 0) pos.toFloat() else 0f,
-            onValueChange = {
-                pos = it.toInt()
-                try { player.seekTo(it.toInt()) } catch (_: Exception) { }
-            },
-            valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
-            modifier = Modifier.weight(1f)
-        )
-        Text(fmtMs(dur.toLong()), style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (failed) {
+            Text("该文件无法播放",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f))
+        } else {
+            Text(fmtMs(pos.toLong()), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Slider(
+                value = if (dur > 0) pos.toFloat() else 0f,
+                onValueChange = {
+                    pos = it.toInt()
+                    try { player.seekTo(it.toInt()) } catch (_: Exception) { }
+                },
+                valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
+                modifier = Modifier.weight(1f)
+            )
+            Text(fmtMs(dur.toLong()), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

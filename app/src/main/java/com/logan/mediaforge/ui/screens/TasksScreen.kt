@@ -154,7 +154,9 @@ fun TasksScreen() {
 
     // 裁剪对话框（可视化时间轴 + 试听，所见即所听）
     trimFor?.let { t ->
-        val durSec = (t.durationMs / 1000f).coerceAtLeast(0f)
+        // durSec 先用任务记录的 durationMs 初始化；编辑器 prepare 后会用
+        // 输出文件的实际时长回调修正（兼容旧版本记录的裁剪前源时长）
+        var durSec by remember(t.id) { mutableStateOf((t.durationMs / 1000f).coerceAtLeast(0f)) }
         var range by remember(t.id) {
             mutableStateOf(if (durSec > 0f) 0f..durSec else 0f..1f)
         }
@@ -177,9 +179,19 @@ fun TasksScreen() {
                                 range = r
                                 startText = String.format(java.util.Locale.US, "%.1f", r.start)
                                 endText = String.format(java.util.Locale.US, "%.1f", r.endInclusive)
+                            },
+                            onActualDurationMs = { d ->
+                                // 实际文件时长与记录不一致时：修正显示总时长并钳制已选区间
+                                val ds = d / 1000f
+                                if (ds > 0f && kotlin.math.abs(ds - durSec) > 0.05f) {
+                                    durSec = ds
+                                    val ns = range.start.coerceIn(0f, ds)
+                                    val ne = range.endInclusive.coerceIn(minOf(ns + 0.1f, ds), ds)
+                                    range = ns..ne
+                                }
                             }
                         )
-                        Text("完整时长：${fmtMs(t.durationMs)}",
+                        Text("完整时长：${fmtMs((durSec * 1000).toLong())}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
@@ -196,6 +208,8 @@ fun TasksScreen() {
                     val e = if (durSec > 0f) range.endInclusive.toDouble() else parseTimeSec(endText)
                     if (s == null || e == null || e <= s) {
                         Toast.makeText(context, "时间无效：结束必须大于开始", Toast.LENGTH_SHORT).show()
+                    } else if (durSec > 0f && (s >= durSec.toDouble())) {
+                        Toast.makeText(context, "开始时间超出文件实际时长（${fmtMs(durSec.toLong() * 1000L)}），请重新选择", Toast.LENGTH_SHORT).show()
                     } else {
                         val out = t.output
                         if (out != null) {

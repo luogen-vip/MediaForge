@@ -44,18 +44,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.1.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.3.1.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.2.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.3.2.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.3.1.apk
+          path: MediaForge-v1.3.2.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.3.1 || gh release create v1.3.1 --title "MediaForge v1.3.1" --notes "v1.3.1 去水印交互重做（用户反馈修复）：① 框选改为只保留一个框——拖空白处画新框（替换旧框）、拖框内移动位置、拖四角白色圆点缩放大小，不再出现多点多框；② 涂抹高亮改为白色半透明遮罩效果，更像真实涂抹去水印；③ 修复「开始去水印」按钮被顶出屏幕看不到的问题——页面支持上下滚动，按钮提到编辑器正下方并改为两步式大按钮（第一步选图片 / 第二步开始去水印），未标记区域时给出提示；④ 新增「清除框选 / 撤销一笔涂抹 / 清空全部」三个快捷操作。LaMa AI 模型与内置算法兜底保持不变。作者：罗根"
-          gh release upload v1.3.1 MediaForge-v1.3.1.apk --clobber
+          gh release view v1.3.2 || gh release create v1.3.2 --title "MediaForge v1.3.2" --notes "v1.3.2 稳定性重点修复（用户反馈）：① 修复图片去水印必失败的异常 Immutable bitmap passed to Canvas constructor——框选与涂抹两种方式现在都能正常出结果；② 修复任务页「裁剪」显示旧总时长的问题：任务现在记录转换结果的真实时长，裁剪过再裁剪显示的就是裁剪后的时长；③ 修复再裁剪后无法播放的问题：裁剪区间自动按文件实际时长钳制，杜绝裁出空/坏文件，播放失败时也会明确提示而不是无反应；④ 试听/裁剪编辑器以文件实际时长为准，兼容旧版本任务记录。作者：罗根"
+          gh release upload v1.3.2 MediaForge-v1.3.2.apk --clobber

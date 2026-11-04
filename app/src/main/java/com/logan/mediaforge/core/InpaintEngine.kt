@@ -130,8 +130,9 @@ object InpaintEngine {
         }
         onProgress(0.9f, "融合边缘")
 
-        // 结果贴回全分辨率原图
-        val result = src.copy(Bitmap.Config.ARGB_8888, false)
+        // 结果贴回全分辨率原图（copy 第二参数必须为 true：Canvas 构造要求可变 Bitmap，
+        // 传 false 会抛 "Immutable bitmap passed to Canvas constructor"）
+        val result = src.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
         val drawPaint = Paint(Paint.FILTER_BITMAP_FLAG)
         val feather = featheredMask(mask) // ROI 尺寸的白色图（alpha=羽化后的蒙版）

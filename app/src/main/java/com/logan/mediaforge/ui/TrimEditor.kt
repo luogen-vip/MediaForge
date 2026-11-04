@@ -55,14 +55,18 @@ fun TrimEditor(
     mediaUri: Uri? = null,
     range: ClosedFloatingPointRange<Float>,
     onRangeChange: (ClosedFloatingPointRange<Float>) -> Unit,
+    onActualDurationMs: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val durSec = (durationMs / 1000f).coerceAtLeast(0f)
+    // durSec 先用调用方传入的 durationMs 初始化；prepare 后以媒体文件实际时长为准
+    // （旧版本任务的 durationMs 可能记录的是裁剪前的源时长，与实际文件不一致）
+    var durSec by remember(mediaPath, mediaUri) { mutableFloatStateOf(if (durationMs > 0) durationMs / 1000f else 0f) }
 
     var playing by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     var posMs by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var ready by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     val player = remember(mediaPath, mediaUri) { MediaPlayer() }
 
     // 准备播放器（支持本地路径或 content Uri；视频源也可试听其中的声音）
@@ -72,9 +76,15 @@ fun TrimEditor(
             else if (mediaPath != null) player.setDataSource(mediaPath)
             else return@LaunchedEffect
             player.prepare()
+            val d = try { player.duration } catch (_: Exception) { 0 }
+            if (d > 0) {
+                durSec = d / 1000f
+                onActualDurationMs(d)
+            }
             ready = true
         } catch (e: Exception) {
             ready = false
+            failed = true
         }
     }
     DisposableEffect(mediaPath, mediaUri) {
@@ -200,8 +210,9 @@ fun TrimEditor(
                 style = MaterialTheme.typography.labelLarge)
         }
         Text(if (durSec > 0f) "拖动滑块选好区间后点试听：听到的就是裁剪后保留的部分；播放到终点会自动停止。播放中拖动滑块，声音会立刻跳到你拖到的位置。"
+             else if (failed) "无法读取该音频（文件可能已损坏），请直接输入开始/结束时间（秒 / mm:ss）"
              else "无法读取时长，请直接输入开始/结束时间（秒 / mm:ss）",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

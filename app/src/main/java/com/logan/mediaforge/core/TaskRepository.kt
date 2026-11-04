@@ -222,6 +222,32 @@ object TaskRepository {
                 val det = FileSniffer.detect(src)
                 val info = MediaProbe.probe(src.absolutePath)
                 val total = info?.durationMs ?: 0L
+                // 裁剪区间按源文件实际时长钳制：防止基于旧时长（如裁剪前的总时长）选择的
+                // 区间超出文件实际范围，导致 FFmpeg 裁出空/无效文件而无法播放
+                var ts = trimStartMs
+                var te = trimEndMs
+                if (ts != null || te != null) {
+                    if (total <= 0L) {
+                        fail(id, "无法读取源文件时长，无法执行裁剪；请重新选择文件后重试")
+                        return@launch
+                    }
+                    val s = (ts ?: 0L).coerceIn(0L, (total - 100L).coerceAtLeast(0L))
+                    val rawEnd = te
+                    val e: Long = if (rawEnd == null) {
+                        total
+                    } else if (rawEnd > total) {
+                        total
+                    } else if (rawEnd <= s) {
+                        if (s + 100L <= total) s + 100L else total
+                    } else {
+                        rawEnd
+                    }
+                    if (e - s < 100L) {
+                        fail(id, "裁剪区间无效：文件实际时长 ${fmtMs(total)}，所选区间超出文件范围")
+                        return@launch
+                    }
+                    ts = s; te = e
+                }
                 val fromExt = src.extension.ifBlank { det?.realExt ?: "bin" }
                 val kindName = when {
                     isTrim -> "音频裁剪"
@@ -238,8 +264,10 @@ object TaskRepository {
                     )
                 }
                 val out = uniqueOut(params.ext)
-                val args = buildAudioArgs(src.absolutePath, out.absolutePath, params, trimStartMs, trimEndMs)
-                val session = runFfmpeg(id, args, total)
+                val args = buildAudioArgs(src.absolutePath, out.absolutePath, params, ts, te)
+                // 进度分母用裁剪后的有效时长（无裁剪时为源总时长），进度更准确
+                val progTotal = if (ts != null && te != null && te > ts) te - ts else total
+                val session = runFfmpeg(id, args, progTotal)
                 if (!ReturnCode.isSuccess(session.returnCode)) {
                     if (ReturnCode.isCancel(session.returnCode)) {
                         update(id) { it.copy(status = TaskStatus.CANCELED, phase = "已取消") }
@@ -529,7 +557,11 @@ object TaskRepository {
         update(id) {
             it.copy(
                 status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
-                output = out, outputInfo = "时长 $durText · ${fmtBytes(out.length())}"
+                output = out, outputInfo = "时长 $durText · ${fmtBytes(out.length())}",
+                // 关键：durationMs 必须记录「输出文件」的真实时长。
+                // 之前只记录源文件时长，导致裁剪任务在任务页点「裁剪」时
+                // 显示的是裁剪前的总时长，用户按旧时长再裁会裁出无效文件
+                durationMs = if (info.durationMs > 0) info.durationMs else it.durationMs
             )
         }
     }
