@@ -39,18 +39,17 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.2.1.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.2.1.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.2.2.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.2.2.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.2.1.apk
+          path: MediaForge-v1.2.2.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.2.1 || gh release create v1.2.1 --title "MediaForge v1.2.1" --notes "v1.2.1 任务体验优化（用户反馈修复）：① 任务列表改为最新任务排在最顶部，越新转换的越靠上；② 每个任务卡片显示创建时间（精确到秒，如 2026-11-04 15:30:21），多个任务一眼分清；③ 删除任务弹窗的「同时删除本地文件」勾选项改为始终显示（此前仅在已下载过副本时才出现），勾选后连同本地文件（含已下载到系统文件夹的副本）一起删除。作者：罗根" 
-          gh release upload v1.2.1 MediaForge-v1.2.1.apk --clobber
+          gh release view v1.2.2 || gh release create v1.2.2 --title "MediaForge v1.2.2" --notes "v1.2.2 稳定性重点修复（用户反馈）：① 修复图片分辨率页花屏闪退——此前输入/删除分辨率时预览区比例会瞬间变成极端值，撑爆渲染层导致整屏竖条花屏并闪退；现预览改为固定高度容器内等比缩放居中，任何输入都不会撑爆布局。② 修复分辨率输入框位置乱跳——预览区高度不再随输入变化，输入框固定在原位，删完字也不用重新找输入框。③ 新增分辨率上限校验（单边最大32767像素、总像素8000万），超限给出明确提示，转换引擎增加内存不足保护，避免崩溃。作者：罗根"

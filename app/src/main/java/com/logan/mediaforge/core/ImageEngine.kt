@@ -42,14 +42,20 @@ object ImageEngine {
     }
 
     fun convert(context: Context, uri: Uri, targetExt: String, w: Int, h: Int, quality: Int, out: File): Boolean {
+        // 防超大分辨率：限制单边与总像素，超出直接失败（任务页提示），不导致崩溃
+        val cw = if (w > 0) w.coerceIn(1, 32767) else 0
+        val ch = if (h > 0) h.coerceIn(1, 32767) else 0
+        if (cw > 0 && ch > 0 && cw.toLong() * ch > 80_000_000L) return false
         return try {
             val ok = when (targetExt) {
-                "jpg" -> viaBitmap(context, uri, w, h, Bitmap.CompressFormat.JPEG, quality.coerceIn(10, 100), out)
-                "png" -> viaBitmap(context, uri, w, h, Bitmap.CompressFormat.PNG, 100, out)
-                "webp" -> viaBitmap(context, uri, w, h, webpFormat(), quality.coerceIn(10, 100), out)
-                else -> viaFfmpeg(context, uri, targetExt, w, h, out)
+                "jpg" -> viaBitmap(context, uri, cw, ch, Bitmap.CompressFormat.JPEG, quality.coerceIn(10, 100), out)
+                "png" -> viaBitmap(context, uri, cw, ch, Bitmap.CompressFormat.PNG, 100, out)
+                "webp" -> viaBitmap(context, uri, cw, ch, webpFormat(), quality.coerceIn(10, 100), out)
+                else -> viaFfmpeg(context, uri, targetExt, cw, ch, out)
             }
             ok && out.exists() && out.length() > 0
+        } catch (e: OutOfMemoryError) {
+            false
         } catch (e: Exception) {
             false
         }
@@ -70,7 +76,11 @@ object ImageEngine {
         } ?: return false
         var result = bmp
         if (w > 0 && h > 0 && (w != bmp.width || h != bmp.height)) {
-            result = Bitmap.createScaledBitmap(bmp, w, h, true)
+            result = try {
+                Bitmap.createScaledBitmap(bmp, w, h, true)
+            } catch (e: OutOfMemoryError) {
+                bmp
+            }
         }
         val ok = out.outputStream().use { result.compress(fmt, quality, it) }
         if (result !== bmp) bmp.recycle()

@@ -339,6 +339,8 @@ object TaskRepository {
                         output = out, outputInfo = (if (w > 0 && h > 0) "${w}×${h} · " else "") + fmtBytes(out.length())
                     )
                 }
+            } catch (e: OutOfMemoryError) {
+                fail(id, "内存不足：分辨率过大或图片太大，请调小分辨率后重试")
             } catch (e: Exception) {
                 fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
             }

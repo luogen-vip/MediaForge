@@ -7,16 +7,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -31,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -89,10 +93,12 @@ fun ImageScreen() {
         if (u != null) onPicked(u)
     }
 
-    val targetW = st.wText.toIntOrNull() ?: 0
-    val targetH = st.hText.toIntOrNull() ?: 0
+    val targetW = (st.wText.toIntOrNull() ?: 0).coerceIn(0, 32767)
+    val targetH = (st.hText.toIntOrNull() ?: 0).coerceIn(0, 32767)
     // 宽高均有效时用目标比例；输入过程中（清空/半输入）沿用最近有效比例，避免画幅跳动
-    val aspect = if (targetW > 0 && targetH > 0) targetW.toFloat() / targetH.toFloat() else st.lastAspect
+    val aspect = if (targetW > 0 && targetH > 0) {
+        targetW.toFloat() / targetH.toFloat()
+    } else st.lastAspect
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
@@ -109,16 +115,27 @@ fun ImageScreen() {
                 }
             }
         } else {
-            // 实时预览：容器比例随目标分辨率变化
+            // 实时预览：固定高度容器，画幅比例随目标分辨率变化（等比缩放居中，
+            // 布局尺寸永远不超过容器 → 任何输入都不会撑爆渲染层或顶跑输入框）
             SectionCard("实时预览", "下方预览的画幅比例 = 你设置的目标分辨率") {
                 val bmp = st.preview
-                if (bmp != null) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = "预览",
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(aspect)
-                    )
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(260.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (bmp != null) {
+                        // 防极端比例（如误输入超大值），限制在 1:20 ~ 20:1 之间
+                        val a = aspect.coerceIn(0.05f, 20f)
+                        var w = maxWidth
+                        var h = if (a > 0f) w / a else maxHeight
+                        if (h > maxHeight) { h = maxHeight; w = h * a }
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = "预览",
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.size(w, h).clip(RoundedCornerShape(10.dp))
+                        )
+                    }
                 }
                 if (st.det?.mismatch == true) {
                     Text("⚠ 后缀被改过：声称 .${st.det?.declaredExt}，真实格式是 ${st.det?.realName}",
@@ -143,10 +160,10 @@ fun ImageScreen() {
                     OutlinedTextField(
                         value = st.wText,
                         onValueChange = {
-                            st.wText = it.filter { c -> c.isDigit() }
+                            st.wText = it.filter { c -> c.isDigit() }.take(5)
                             if (st.keepRatio && st.origW > 0) {
                                 val w = st.wText.toIntOrNull()
-                                if (w != null) st.hText = (w * st.origH / st.origW).toString()
+                                if (w != null) st.hText = (w.toLong() * st.origH / st.origW).toString().take(5)
                             }
                         },
                         label = { Text("宽") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -154,10 +171,10 @@ fun ImageScreen() {
                     OutlinedTextField(
                         value = st.hText,
                         onValueChange = {
-                            st.hText = it.filter { c -> c.isDigit() }
+                            st.hText = it.filter { c -> c.isDigit() }.take(5)
                             if (st.keepRatio && st.origH > 0) {
                                 val h = st.hText.toIntOrNull()
-                                if (h != null) st.wText = (h * st.origW / st.origH).toString()
+                                if (h != null) st.wText = (h.toLong() * st.origW / st.origH).toString().take(5)
                             }
                         },
                         label = { Text("高") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -170,6 +187,9 @@ fun ImageScreen() {
                     st.wText = st.origW.toString()
                     st.hText = st.origH.toString()
                 }) { Text("重置为原始分辨率") }
+                Text("单边最大支持 32767 像素；超大分辨率会明显变慢并占用更多内存",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
             SectionCard("目标格式与质量") {
@@ -192,6 +212,14 @@ fun ImageScreen() {
             Button(
                 onClick = {
                     val u = st.uri ?: return@Button
+                    if ((st.wText.toIntOrNull() ?: 0) > 32767 || (st.hText.toIntOrNull() ?: 0) > 32767) {
+                        Toast.makeText(context, "分辨率超出限制：单边最大 32767 像素", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    if (targetW > 0 && targetH > 0 && targetW.toLong() * targetH > 80_000_000L) {
+                        Toast.makeText(context, "分辨率过大（总像素超过 8000 万），请调小一些", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
                     TaskRepository.startImage(u, st.name, st.extSel, targetW, targetH, st.quality.toInt())
                     Toast.makeText(context, "已加入任务，可在「任务」页查看与下载", Toast.LENGTH_SHORT).show()
                 },
