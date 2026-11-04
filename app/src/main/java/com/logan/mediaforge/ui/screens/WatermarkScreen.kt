@@ -457,7 +457,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrokePath(
         val x = offX + s.pts[i].first * drawW
         val y = offY + s.pts[i].second * drawH
         // 二次贝塞尔经过相邻两点中点，折线变圆滑，快速拖动也不会断开
-        path.quadTo(px, py, (px + x) / 2f, (py + y) / 2f)
+        path.quadraticBezierTo(px, py, (px + x) / 2f, (py + y) / 2f)
         px = x; py = y
     }
     path.lineTo(px, py)
