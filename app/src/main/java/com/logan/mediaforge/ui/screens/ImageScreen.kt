@@ -70,17 +70,17 @@ fun ImageScreen() {
             val d = withContext(Dispatchers.IO) { FileSniffer.detect(resolver, u, n.substringAfterLast('.', "")) }
             val wh = withContext(Dispatchers.IO) { ImageEngine.decodeSize(context, u) }
             val bmp = withContext(Dispatchers.IO) { ImageEngine.decodePreview(context, u) }
-            st.uri.value = u
-            st.name.value = n
-            st.size.value = FileSniffer.querySize(resolver, u)
-            st.det.value = d
-            st.preview.value = bmp
-            st.origW.value = wh?.first ?: 0
-            st.origH.value = wh?.second ?: 0
-            st.wText.value = wh?.first?.toString() ?: ""
-            st.hText.value = wh?.second?.toString() ?: ""
+            st.uri = u
+            st.name = n
+            st.size = FileSniffer.querySize(resolver, u)
+            st.det = d
+            st.preview = bmp
+            st.origW = wh?.first ?: 0
+            st.origH = wh?.second ?: 0
+            st.wText = wh?.first?.toString() ?: ""
+            st.hText = wh?.second?.toString() ?: ""
             if (wh != null && wh.first > 0 && wh.second > 0) {
-                st.lastAspect.value = wh.first.toFloat() / wh.second.toFloat()
+                st.lastAspect = wh.first.toFloat() / wh.second.toFloat()
             }
         }
     }
@@ -89,10 +89,10 @@ fun ImageScreen() {
         if (u != null) onPicked(u)
     }
 
-    val targetW = st.wText.value.toIntOrNull() ?: 0
-    val targetH = st.hText.value.toIntOrNull() ?: 0
+    val targetW = st.wText.toIntOrNull() ?: 0
+    val targetH = st.hText.toIntOrNull() ?: 0
     // 宽高均有效时用目标比例；输入过程中（清空/半输入）沿用最近有效比例，避免画幅跳动
-    val aspect = if (targetW > 0 && targetH > 0) targetW.toFloat() / targetH.toFloat() else st.lastAspect.value
+    val aspect = if (targetW > 0 && targetH > 0) targetW.toFloat() / targetH.toFloat() else st.lastAspect
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
@@ -102,7 +102,7 @@ fun ImageScreen() {
         Text("像素级真实转换（非改后缀），可同时调整分辨率，实时预览。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-        if (st.uri.value == null) {
+        if (st.uri == null) {
             SectionCard("选择图片", "支持 JPG/PNG/WebP/BMP/TIFF/HEIC/GIF 等常见图片") {
                 Button(onClick = { pick.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
                     Text("选择图片")
@@ -111,7 +111,7 @@ fun ImageScreen() {
         } else {
             // 实时预览：容器比例随目标分辨率变化
             SectionCard("实时预览", "下方预览的画幅比例 = 你设置的目标分辨率") {
-                val bmp = st.preview.value
+                val bmp = st.preview
                 if (bmp != null) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
@@ -120,19 +120,19 @@ fun ImageScreen() {
                         modifier = Modifier.fillMaxWidth().aspectRatio(aspect)
                     )
                 }
-                if (st.det.value?.mismatch == true) {
-                    Text("⚠ 后缀被改过：声称 .${st.det.value?.declaredExt}，真实格式是 ${st.det.value?.realName}",
+                if (st.det?.mismatch == true) {
+                    Text("⚠ 后缀被改过：声称 .${st.det?.declaredExt}，真实格式是 ${st.det?.realName}",
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                 }
-                if (st.det.value?.corrupted != null) {
-                    Text("⚠ ${st.det.value?.corrupted}", color = MaterialTheme.colorScheme.error,
+                if (st.det?.corrupted != null) {
+                    Text("⚠ ${st.det?.corrupted}", color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
-                InfoRow("文件名", st.name.value)
-                InfoRow("真实格式", st.det.value?.realName ?: "未知")
-                InfoRow("原始分辨率", if (st.origW.value > 0) "${st.origW.value}×${st.origH.value}" else "未知")
-                InfoRow("文件大小", if (st.size.value > 0) fmtBytes(st.size.value) else "未知")
+                InfoRow("文件名", st.name)
+                InfoRow("真实格式", st.det?.realName ?: "未知")
+                InfoRow("原始分辨率", if (st.origW > 0) "${st.origW}×${st.origH}" else "未知")
+                InfoRow("文件大小", if (st.size > 0) fmtBytes(st.size) else "未知")
                 OutlinedButton(onClick = { st.resetSource() }) {
                     Text("移除 / 重新选择")
                 }
@@ -141,34 +141,34 @@ fun ImageScreen() {
             SectionCard("目标分辨率", "修改后下方预览实时变化；留空或 0 表示保持原始分辨率") {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
-                        value = st.wText.value,
+                        value = st.wText,
                         onValueChange = {
-                            st.wText.value = it.filter { c -> c.isDigit() }
-                            if (st.keepRatio.value && st.origW.value > 0) {
-                                val w = st.wText.value.toIntOrNull()
-                                if (w != null) st.hText.value = (w * st.origH.value / st.origW.value).toString()
+                            st.wText = it.filter { c -> c.isDigit() }
+                            if (st.keepRatio && st.origW > 0) {
+                                val w = st.wText.toIntOrNull()
+                                if (w != null) st.hText = (w * st.origH / st.origW).toString()
                             }
                         },
                         label = { Text("宽") }, singleLine = true, modifier = Modifier.weight(1f))
                     Text("×", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
-                        value = st.hText.value,
+                        value = st.hText,
                         onValueChange = {
-                            st.hText.value = it.filter { c -> c.isDigit() }
-                            if (st.keepRatio.value && st.origH.value > 0) {
-                                val h = st.hText.value.toIntOrNull()
-                                if (h != null) st.wText.value = (h * st.origW.value / st.origH.value).toString()
+                            st.hText = it.filter { c -> c.isDigit() }
+                            if (st.keepRatio && st.origH > 0) {
+                                val h = st.hText.toIntOrNull()
+                                if (h != null) st.wText = (h * st.origW / st.origH).toString()
                             }
                         },
                         label = { Text("高") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("保持宽高比", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Switch(checked = st.keepRatio.value, onCheckedChange = { st.keepRatio.value = it })
+                    Switch(checked = st.keepRatio, onCheckedChange = { st.keepRatio = it })
                 }
                 OutlinedButton(onClick = {
-                    st.wText.value = st.origW.value.toString()
-                    st.hText.value = st.origH.value.toString()
+                    st.wText = st.origW.toString()
+                    st.hText = st.origH.toString()
                 }) { Text("重置为原始分辨率") }
             }
 
@@ -176,23 +176,23 @@ fun ImageScreen() {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IMAGE_TARGETS.forEach { e ->
                         FilterChip(
-                            selected = st.extSel.value == e,
-                            onClick = { st.extSel.value = e },
+                            selected = st.extSel == e,
+                            onClick = { st.extSel = e },
                             label = { Text(e.uppercase()) }
                         )
                     }
                 }
-                if (st.extSel.value == "jpg" || st.extSel.value == "webp") {
-                    Text("质量：${st.quality.value.toInt()}", style = MaterialTheme.typography.bodySmall,
+                if (st.extSel == "jpg" || st.extSel == "webp") {
+                    Text("质量：${st.quality.toInt()}", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Slider(value = st.quality.value, onValueChange = { st.quality.value = it }, valueRange = 30f..100f)
+                    Slider(value = st.quality, onValueChange = { st.quality = it }, valueRange = 30f..100f)
                 }
             }
 
             Button(
                 onClick = {
-                    val u = st.uri.value ?: return@Button
-                    TaskRepository.startImage(u, st.name.value, st.extSel.value, targetW, targetH, st.quality.value.toInt())
+                    val u = st.uri ?: return@Button
+                    TaskRepository.startImage(u, st.name, st.extSel, targetW, targetH, st.quality.toInt())
                     Toast.makeText(context, "已加入任务，可在「任务」页查看与下载", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.fillMaxWidth()

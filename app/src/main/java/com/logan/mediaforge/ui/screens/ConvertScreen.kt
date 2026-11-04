@@ -91,29 +91,29 @@ fun ConvertScreen() {
     // 场景校验对话框（本页局部状态）
     var pendingWarnings by remember { mutableStateOf<List<String>?>(null) }
 
-    val spec = AudioFormats.byExt(st.ext.value)
-    val extValue = st.ext.value
-    val srValue = st.sr.value
-    val chValue = st.ch.value
-    val brValue = st.br.value
-    val depthValue = st.depth.value
-    val vbrValue = st.vbr.value
-    val compValue = st.comp.value
-    val presetIdValue = st.presetId.value
+    val spec = AudioFormats.byExt(st.ext)
+    val extValue = st.ext
+    val srValue = st.sr
+    val chValue = st.ch
+    val brValue = st.br
+    val depthValue = st.depth
+    val vbrValue = st.vbr
+    val compValue = st.comp
+    val presetIdValue = st.presetId
 
-    fun touch() { if (st.presetId.value != null) st.presetTouched.value = true }
+    fun touch() { if (st.presetId != null) st.presetTouched = true }
 
     fun applyPreset(id: String) {
         val p = Presets.byId(id) ?: return
-        st.presetId.value = id
-        st.presetTouched.value = false
-        st.ext.value = p.params.ext
-        st.sr.value = p.params.sampleRate
-        st.ch.value = p.params.channels
-        st.br.value = p.params.bitrate
-        st.depth.value = p.params.bitDepth
-        st.vbr.value = p.params.vbr
-        st.comp.value = p.params.compression
+        st.presetId = id
+        st.presetTouched = false
+        st.ext = p.params.ext
+        st.sr = p.params.sampleRate
+        st.ch = p.params.channels
+        st.br = p.params.bitrate
+        st.depth = p.params.bitDepth
+        st.vbr = p.params.vbr
+        st.comp = p.params.compression
     }
 
     fun onPicked(uri: Uri, videoHint: Boolean) {
@@ -135,13 +135,13 @@ fun ConvertScreen() {
                 if (saf != null) MediaProbe.probe(saf) else null
             }
             val size = FileSniffer.querySize(resolver, uri)
-            st.pickedUri.value = uri
-            st.pickedName.value = name
-            st.pickedSize.value = size
-            st.detection.value = det
-            st.mediaInfo.value = info
-            st.isVideoSource.value = det?.category == "VIDEO" || (det == null && videoHint)
-            st.toVideo.value = false
+            st.pickedUri = uri
+            st.pickedName = name
+            st.pickedSize = size
+            st.detection = det
+            st.mediaInfo = info
+            st.isVideoSource = det?.category == "VIDEO" || (det == null && videoHint)
+            st.toVideo = false
             st.resetParams()
         }
     }
@@ -154,21 +154,21 @@ fun ConvertScreen() {
     }
 
     fun doConvert() {
-        val uri = st.pickedUri.value ?: return
-        val sSec = if (st.trimOn.value) parseTimeToSec(st.trimStart.value) else null
-        val eSec = if (st.trimOn.value) parseTimeToSec(st.trimEnd.value) else null
-        if (st.toVideo.value && st.isVideoSource.value) {
-            val (sw, sh) = when (st.scaleSel.value) {
+        val uri = st.pickedUri ?: return
+        val sSec = if (st.trimOn) parseTimeToSec(st.trimStart) else null
+        val eSec = if (st.trimOn) parseTimeToSec(st.trimEnd) else null
+        if (st.toVideo && st.isVideoSource) {
+            val (sw, sh) = when (st.scaleSel) {
                 "1080p (1920×1080)" -> 1920 to 1080
                 "720p (1280×720)" -> 1280 to 720
                 "480p (854×480)" -> 854 to 480
                 "360p (640×360)" -> 640 to 360
                 else -> 0 to 0
             }
-            TaskRepository.startVideo(uri, null, st.pickedName.value,
-                VideoParams(st.vExt.value, st.vCodec.value, st.crf.value, st.speed.value, sw, sh, st.fpsSel.value, st.vAbr.value))
+            TaskRepository.startVideo(uri, null, st.pickedName,
+                VideoParams(st.vExt, st.vCodec, st.crf, st.speed, sw, sh, st.fpsSel, st.vAbr))
         } else {
-            if (st.trimOn.value) {
+            if (st.trimOn) {
                 if (sSec == null || eSec == null || eSec <= sSec) {
                     Toast.makeText(context, "裁剪时间无效：请先拖动滑块或填写开始/结束时间", Toast.LENGTH_SHORT).show()
                     return
@@ -176,9 +176,9 @@ fun ConvertScreen() {
             }
             val params = AudioParams(extValue, srValue, chValue, brValue, depthValue, vbrValue, compValue)
             TaskRepository.startAudio(
-                uri, null, st.pickedName.value, params,
-                if (st.trimOn.value && sSec != null) (sSec * 1000).toLong() else null,
-                if (st.trimOn.value && eSec != null) (eSec * 1000).toLong() else null
+                uri, null, st.pickedName, params,
+                if (st.trimOn && sSec != null) (sSec * 1000).toLong() else null,
+                if (st.trimOn && eSec != null) (eSec * 1000).toLong() else null
             )
         }
         Toast.makeText(context, "已加入任务，可在「任务」页查看进度、播放与下载", Toast.LENGTH_SHORT).show()
@@ -192,7 +192,7 @@ fun ConvertScreen() {
         Text("真实 FFmpeg 转码（非改后缀）。支持视频→音频、音频→音频（含同格式改参数）、视频→视频。上传大小无限制。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-        if (st.pickedUri.value == null) {
+        if (st.pickedUri == null) {
             SectionCard("选择源文件", "从系统选择视频或音频（也可在「识别」页检验文件真实格式后再转换）") {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { pickVideo.launch("video/*") }, modifier = Modifier.weight(1f)) {
@@ -205,24 +205,24 @@ fun ConvertScreen() {
             }
         } else {
             // -------- 源文件预览与信息 --------
-            SectionCard("源文件：${st.pickedName.value}") {
-                if (st.isVideoSource.value) {
-                    VideoPreview(st.pickedUri.value!!, Modifier.fillMaxWidth().height(220.dp))
+            SectionCard("源文件：${st.pickedName}") {
+                if (st.isVideoSource) {
+                    VideoPreview(st.pickedUri!!, Modifier.fillMaxWidth().height(220.dp))
                 } else {
-                    AudioPlayer(mediaUri = st.pickedUri.value)
+                    AudioPlayer(mediaUri = st.pickedUri)
                 }
-                if (st.detection.value?.mismatch == true) {
-                    Text("⚠ 后缀被改过：声称 .${st.detection.value?.declaredExt}，真实格式是 ${st.detection.value?.realName}",
+                if (st.detection?.mismatch == true) {
+                    Text("⚠ 后缀被改过：声称 .${st.detection?.declaredExt}，真实格式是 ${st.detection?.realName}",
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                 }
-                if (st.detection.value?.corrupted != null) {
-                    Text("⚠ ${st.detection.value?.corrupted}", color = MaterialTheme.colorScheme.error,
+                if (st.detection?.corrupted != null) {
+                    Text("⚠ ${st.detection?.corrupted}", color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
-                InfoRow("真实格式", st.detection.value?.realName ?: "未知")
-                InfoRow("文件大小", if (st.pickedSize.value > 0) fmtBytes(st.pickedSize.value) else "未知")
-                val info = st.mediaInfo.value
+                InfoRow("真实格式", st.detection?.realName ?: "未知")
+                InfoRow("文件大小", if (st.pickedSize > 0) fmtBytes(st.pickedSize) else "未知")
+                val info = st.mediaInfo
                 if (info != null) {
                     InfoRow("时长", fmtMs(info.durationMs))
                     if (info.videoCodec != null) {
@@ -236,7 +236,7 @@ fun ConvertScreen() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(onClick = {
-                        if (st.isVideoSource.value) pickVideo.launch("video/*") else pickAudio.launch("audio/*")
+                        if (st.isVideoSource) pickVideo.launch("video/*") else pickAudio.launch("audio/*")
                     }) {
                         Text("替换")
                     }
@@ -247,48 +247,48 @@ fun ConvertScreen() {
             }
 
             // -------- 模式切换（视频源可转视频） --------
-            if (st.isVideoSource.value) {
+            if (st.isVideoSource) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilterChip(selected = !st.toVideo.value, onClick = { st.toVideo.value = false; touch() },
+                    FilterChip(selected = !st.toVideo, onClick = { st.toVideo = false; touch() },
                         label = { Text("转为音频") })
-                    FilterChip(selected = st.toVideo.value, onClick = { st.toVideo.value = true; touch() },
+                    FilterChip(selected = st.toVideo, onClick = { st.toVideo = true; touch() },
                         label = { Text("转为视频") })
                 }
             }
 
-            if (st.toVideo.value && st.isVideoSource.value) {
+            if (st.toVideo && st.isVideoSource) {
                 // -------- 视频转视频参数 --------
                 SectionCard("目标视频格式") {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         VideoFormats.ALL.forEach { f ->
                             FilterChip(
-                                selected = st.vExt.value == f.ext,
-                                onClick = { st.vExt.value = f.ext; st.vCodec.value = f.codecs.first(); touch() },
+                                selected = st.vExt == f.ext,
+                                onClick = { st.vExt = f.ext; st.vCodec = f.codecs.first(); touch() },
                                 label = { Text(f.label) }
                             )
                         }
                     }
-                    val vspec = VideoFormats.byExt(st.vExt.value)
+                    val vspec = VideoFormats.byExt(st.vExt)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DropdownField("视频编码", vspec?.codecs ?: listOf("h264"), { it }, st.vCodec.value,
-                            { st.vCodec.value = it; touch() }, Modifier.weight(1f))
-                        DropdownField("画质 CRF（越低越清晰）", (14..32).toList(), { "$it" }, st.crf.value,
-                            { st.crf.value = it; touch() }, Modifier.weight(1f))
+                        DropdownField("视频编码", vspec?.codecs ?: listOf("h264"), { it }, st.vCodec,
+                            { st.vCodec = it; touch() }, Modifier.weight(1f))
+                        DropdownField("画质 CRF（越低越清晰）", (14..32).toList(), { "$it" }, st.crf,
+                            { st.crf = it; touch() }, Modifier.weight(1f))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         DropdownField("编码速度", SPEED_LABELS.keys.toList(),
-                            { SPEED_LABELS[it] ?: it }, st.speed.value,
-                            { st.speed.value = it; touch() }, Modifier.weight(1f))
+                            { SPEED_LABELS[it] ?: it }, st.speed,
+                            { st.speed = it; touch() }, Modifier.weight(1f))
                         DropdownField("分辨率",
                             listOf("原画", "1080p (1920×1080)", "720p (1280×720)", "480p (854×480)", "360p (640×360)"),
-                            { it }, st.scaleSel.value, { st.scaleSel.value = it; touch() }, Modifier.weight(1f))
+                            { it }, st.scaleSel, { st.scaleSel = it; touch() }, Modifier.weight(1f))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         DropdownField("帧率", listOf(0, 24, 30, 60),
                             { if (it == 0) "保持原帧率" else "${it}fps" },
-                            st.fpsSel.value, { st.fpsSel.value = it; touch() }, Modifier.weight(1f))
+                            st.fpsSel, { st.fpsSel = it; touch() }, Modifier.weight(1f))
                         DropdownField("音轨码率", listOf(128, 192, 256, 320), { "${it}kbps" },
-                            st.vAbr.value, { st.vAbr.value = it; touch() }, Modifier.weight(1f))
+                            st.vAbr, { st.vAbr = it; touch() }, Modifier.weight(1f))
                     }
                 }
             } else {
@@ -298,7 +298,7 @@ fun ConvertScreen() {
                         Presets.ALL.forEach { p ->
                             FilterChip(
                                 selected = presetIdValue == p.id,
-                                onClick = { if (presetIdValue == p.id) st.presetId.value = null else applyPreset(p.id) },
+                                onClick = { if (presetIdValue == p.id) st.presetId = null else applyPreset(p.id) },
                                 label = { Text(p.name) }
                             )
                         }
@@ -319,7 +319,7 @@ fun ConvertScreen() {
                                 selected = extValue == f.ext,
                                 onClick = {
                                     if (extValue != f.ext) {
-                                        st.ext.value = f.ext; touch(); st.vbr.value = -1; st.comp.value = -1
+                                        st.ext = f.ext; touch(); st.vbr = -1; st.comp = -1
                                     }
                                 },
                                 label = { Text(f.label) }
@@ -338,36 +338,36 @@ fun ConvertScreen() {
                         DropdownField("采样率",
                             listOf(0) + SAMPLE_RATES,
                             { if (it == 0) "默认（跟随源）" else "$it Hz" },
-                            srValue, { st.sr.value = it; touch() }, Modifier.weight(1f))
+                            srValue, { st.sr = it; touch() }, Modifier.weight(1f))
                         DropdownField("声道",
                             listOf(0, 1, 2),
                             { if (it == 0) "默认（跟随源）" else if (it == 1) "单声道" else "立体声" },
-                            chValue, { st.ch.value = it; touch() }, Modifier.weight(1f))
+                            chValue, { st.ch = it; touch() }, Modifier.weight(1f))
                     }
                     if (spec?.isPcm == true) {
                         DropdownField("位深",
                             spec.bitDepths,
                             { if (it == "f32") "32bit 浮点" else "${it}bit" },
-                            depthValue, { st.depth.value = it; touch() })
+                            depthValue, { st.depth = it; touch() })
                     }
                     if (spec?.supportsCompression == true) {
                         DropdownField("FLAC 压缩等级", listOf(-1) + (0..9).toList(),
                             { if (it == -1) "默认（5）" else "等级 $it" },
-                            compValue, { st.comp.value = it; touch() })
+                            compValue, { st.comp = it; touch() })
                     }
                     if (spec?.supportsBitrate == true) {
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             Text("VBR 可变码率", style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f))
                             Switch(checked = vbrValue >= 0,
-                                onCheckedChange = { st.vbr.value = if (it) 4 else -1; touch() })
+                                onCheckedChange = { st.vbr = if (it) 4 else -1; touch() })
                         }
                         if (vbrValue >= 0) {
                             Text("VBR 质量：q$vbrValue（数字越大音质越好）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Slider(value = vbrValue.coerceIn(0, 9).toFloat(),
-                                onValueChange = { st.vbr.value = it.toInt(); touch() },
+                                onValueChange = { st.vbr = it.toInt(); touch() },
                                 valueRange = 0f..9f, steps = 8)
                         } else {
                             Text("比特率：${if (brValue > 0) "${brValue}kbps" else "默认（${spec.defaultBitrate}kbps）"}",
@@ -376,15 +376,15 @@ fun ConvertScreen() {
                             Slider(
                                 value = (if (brValue > 0) brValue else spec.defaultBitrate)
                                     .coerceIn(spec.bitrateRange.first, spec.bitrateRange.last).toFloat(),
-                                onValueChange = { st.br.value = it.toInt(); touch() },
+                                onValueChange = { st.br = it.toInt(); touch() },
                                 valueRange = spec.bitrateRange.first.toFloat()..spec.bitrateRange.last.toFloat()
                             )
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 listOf(64, 128, 192, 256, 320).filter { it in spec.bitrateRange }.forEach { v ->
-                                    FilterChip(selected = brValue == v, onClick = { st.br.value = v; touch() },
+                                    FilterChip(selected = brValue == v, onClick = { st.br = v; touch() },
                                         label = { Text("${v}k") })
                                 }
-                                FilterChip(selected = brValue == 0, onClick = { st.br.value = 0; touch() },
+                                FilterChip(selected = brValue == 0, onClick = { st.br = 0; touch() },
                                     label = { Text("默认") })
                             }
                         }
@@ -395,12 +395,12 @@ fun ConvertScreen() {
                 SectionCard("裁剪（可选）", "拖动滑块两端选择保留区间，实时显示；也可直接输入时间（秒 / mm:ss）") {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Text("启用裁剪", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        Switch(checked = st.trimOn.value, onCheckedChange = { st.trimOn.value = it; touch() })
+                        Switch(checked = st.trimOn, onCheckedChange = { st.trimOn = it; touch() })
                     }
-                    if (st.trimOn.value) {
-                        val durSec = (st.mediaInfo.value?.durationMs ?: 0L) / 1000f
+                    if (st.trimOn) {
+                        val durSec = (st.mediaInfo?.durationMs ?: 0L) / 1000f
                         var trimRange by remember { mutableStateOf(0f..0f) }
-                        LaunchedEffect(st.trimOn.value, durSec) {
+                        LaunchedEffect(st.trimOn, durSec) {
                             if (durSec > 0f) trimRange = 0f..durSec
                         }
                         if (durSec > 0f) {
@@ -408,8 +408,8 @@ fun ConvertScreen() {
                                 value = trimRange,
                                 onValueChange = { r ->
                                     trimRange = r
-                                    st.trimStart.value = secText(r.start)
-                                    st.trimEnd.value = secText(r.endInclusive)
+                                    st.trimStart = secText(r.start)
+                                    st.trimEnd = secText(r.endInclusive)
                                 },
                                 valueRange = 0f..durSec
                             )
@@ -418,14 +418,14 @@ fun ConvertScreen() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            Text("源时长：${fmtMs(st.mediaInfo.value!!.durationMs)}（预览播放可帮你确认裁剪位置）",
+                            Text("源时长：${fmtMs(st.mediaInfo!!.durationMs)}（预览播放可帮你确认裁剪位置）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(value = st.trimStart.value, onValueChange = { st.trimStart.value = it },
+                            OutlinedTextField(value = st.trimStart, onValueChange = { st.trimStart = it },
                                 label = { Text("开始（秒 / mm:ss）") }, singleLine = true, modifier = Modifier.weight(1f))
-                            OutlinedTextField(value = st.trimEnd.value, onValueChange = { st.trimEnd.value = it },
+                            OutlinedTextField(value = st.trimEnd, onValueChange = { st.trimEnd = it },
                                 label = { Text("结束（秒 / mm:ss）") }, singleLine = true, modifier = Modifier.weight(1f))
                         }
                     }
@@ -436,7 +436,7 @@ fun ConvertScreen() {
                 onClick = {
                     val preset = presetIdValue?.let { Presets.byId(it) }
                     val params = AudioParams(extValue, srValue, chValue, brValue, depthValue, vbrValue, compValue)
-                    val warnings = if (preset != null && st.presetTouched.value && !st.muteWarnings.value)
+                    val warnings = if (preset != null && st.presetTouched && !st.muteWarnings)
                         Presets.conformanceWarnings(preset, params) else emptyList()
                     if (warnings.isEmpty()) doConvert() else pendingWarnings = warnings
                 },
@@ -449,7 +449,7 @@ fun ConvertScreen() {
 
     // -------- 场景参数提示对话框 --------
     pendingWarnings?.let { warnings ->
-        var muteChecked by remember { mutableStateOf(ConvertState.muteWarnings.value) }
+        var muteChecked by remember { mutableStateOf(ConvertState.muteWarnings) }
         AlertDialog(
             onDismissRequest = { pendingWarnings = null },
             title = { Text("场景参数提示") },
@@ -467,7 +467,7 @@ fun ConvertScreen() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    ConvertState.muteWarnings.value = muteChecked
+                    ConvertState.muteWarnings = muteChecked
                     pendingWarnings = null
                     doConvert()
                 }) { Text("仍然转换") }
