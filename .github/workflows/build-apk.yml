@@ -44,18 +44,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.0.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.3.0.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.3.1.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.3.1.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.3.0.apk
+          path: MediaForge-v1.3.1.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.3.0 || gh release create v1.3.0 --title "MediaForge v1.3.0" --notes "v1.3.0 全新功能：图片去水印（完全离线，不依赖服务器）——新增「去水印」页，支持两种标记方式：① 框选去水印：拖动拉出矩形框住水印；② 涂抹去水印：像画笔一样直接涂抹，笔刷大小可调，支持撤销与清空。内置 LaMa 深度学习修复模型（开源 Apache-2.0，构建时自动 int8 量化打包），根据周围画面智能补全被去除的区域，与整张图自然融合、不突兀；若设备内存不足或模型缺失，自动切换内置多尺度智能填充算法，保证功能永不崩溃。去水印任务与转换任务显示在同一任务列表，真实进度、可下载（无损 PNG）、可重命名。上一版任务排序/时间显示/删除勾选项等优化全部保留。作者：罗根"
-          gh release upload v1.3.0 MediaForge-v1.3.0.apk --clobber
+          gh release view v1.3.1 || gh release create v1.3.1 --title "MediaForge v1.3.1" --notes "v1.3.1 去水印交互重做（用户反馈修复）：① 框选改为只保留一个框——拖空白处画新框（替换旧框）、拖框内移动位置、拖四角白色圆点缩放大小，不再出现多点多框；② 涂抹高亮改为白色半透明遮罩效果，更像真实涂抹去水印；③ 修复「开始去水印」按钮被顶出屏幕看不到的问题——页面支持上下滚动，按钮提到编辑器正下方并改为两步式大按钮（第一步选图片 / 第二步开始去水印），未标记区域时给出提示；④ 新增「清除框选 / 撤销一笔涂抹 / 清空全部」三个快捷操作。LaMa AI 模型与内置算法兜底保持不变。作者：罗根""
+          gh release upload v1.3.1 MediaForge-v1.3.1.apk --clobber
