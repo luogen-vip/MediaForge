@@ -152,7 +152,8 @@ object TaskRepository {
                 )
             }
             counter.set(maxId + 1)
-            _tasks.value = list
+            // 历史任务按创建时间倒序（最新在最顶部）
+            _tasks.value = list.sortedByDescending { it.id }
         } catch (_: Exception) { }
     }
 
@@ -168,7 +169,8 @@ object TaskRepository {
     }
 
     private fun add(task: ConvertTask) {
-        _tasks.update { it + task }
+        // 新任务插到列表最顶部（最新转换的排在最上面）
+        _tasks.update { listOf(task) + it }
         persist()
     }
 

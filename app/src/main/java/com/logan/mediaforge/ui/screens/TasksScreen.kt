@@ -49,6 +49,16 @@ import com.logan.mediaforge.ui.AudioPlayer
 import com.logan.mediaforge.ui.StatusText
 import com.logan.mediaforge.ui.TrimEditor
 import com.logan.mediaforge.ui.VideoPreview
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private val taskTimeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+private fun fmtTaskTime(ms: Long): String {
+    if (ms <= 0L) return ""
+    return taskTimeFmt.format(Date(ms))
+}
 
 @Composable
 fun TasksScreen() {
@@ -209,11 +219,14 @@ fun TasksScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("将删除任务记录与转换结果文件。")
-                    if (t.downloadedUri != null) {
-                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Checkbox(checked = alsoDeleteDownloaded, onCheckedChange = { alsoDeleteDownloaded = it })
-                            Text("同时删除已下载到系统文件夹的副本", style = MaterialTheme.typography.bodySmall)
-                        }
+                    // 勾选项始终显示：勾选后连同本地文件（含已下载副本）一起删除
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(checked = alsoDeleteDownloaded, onCheckedChange = { alsoDeleteDownloaded = it })
+                        Text(
+                            if (t.downloadedUri != null) "同时删除本地文件（含已下载到系统文件夹的副本）"
+                            else "同时删除本地文件",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             },
@@ -271,6 +284,10 @@ private fun TaskCard(
             }
             Text(t.sourceName, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (fmtTaskTime(t.createdAt).isNotEmpty()) {
+                Text("创建时间：${fmtTaskTime(t.createdAt)}", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text(t.detail, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (t.sourceReal.isNotEmpty()) {

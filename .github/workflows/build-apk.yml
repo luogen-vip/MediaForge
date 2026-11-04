@@ -39,18 +39,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.2.0.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.2.0.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.2.1.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.2.1.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.2.0.apk
+          path: MediaForge-v1.2.1.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.2.0 || gh release create v1.2.0 --title "MediaForge v1.2.0" --notes "v1.2.0 全新可视化裁剪：新增时间轴高亮条与播放头，保留区间一目了然；新增「试听选中区间」按钮，从起点播放到终点自动停止，听到的就是裁剪后保留的部分；播放中拖动滑块，声音立刻跳到你拖到的位置（拖到哪听到哪）；转换前裁剪（视频转音频/音频转音频均可用）与任务页转换结果裁剪均已支持；手动输入时间与滑块双向同步。作者：罗根" 
-          gh release upload v1.2.0 MediaForge-v1.2.0.apk --clobber
+          gh release view v1.2.1 || gh release create v1.2.1 --title "MediaForge v1.2.1" --notes "v1.2.1 任务体验优化（用户反馈修复）：① 任务列表改为最新任务排在最顶部，越新转换的越靠上；② 每个任务卡片显示创建时间（精确到秒，如 2026-11-04 15:30:21），多个任务一眼分清；③ 删除任务弹窗的「同时删除本地文件」勾选项改为始终显示（此前仅在已下载过副本时才出现），勾选后连同本地文件（含已下载到系统文件夹的副本）一起删除。作者：罗根" 
+          gh release upload v1.2.1 MediaForge-v1.2.1.apk --clobber
