@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Sign APK
+        run: |
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          echo "Using build-tools: $BT"
+          keytool -genkeypair -v -keystore release.keystore -alias mediaforge \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass mediaforge2024 -keypass mediaforge2024 \
+            -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
+          ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
+          ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.0.0.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.0.0.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaForge-APK
+          path: MediaForge-v1.0.0.apk
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view v1.0.0 || gh release create v1.0.0 --title "MediaForge v1.0.0" --notes "媒体工坊首个版本：视频转音频 / 音频转音频 / 视频转视频 / 图片格式转换 / 任意文件真实格式识别，全部真实转码。作者：罗根"
+          gh release upload v1.0.0 MediaForge-v1.0.0.apk --clobber

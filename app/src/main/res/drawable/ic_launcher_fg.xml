@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MediaForge 图标前景：贝塞尔曲线绘制的声波 + 音波弧线设计 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 声波弧线（三次贝塞尔曲线） -->
+    <path
+        android:pathData="M20,66 C28,86 80,86 88,66"
+        android:strokeColor="#37D2C0"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- 音波曲线（连续三次贝塞尔） -->
+    <path
+        android:pathData="M26,54 C30,42 34,66 38,54 C42,42 46,66 50,54 C54,42 58,66 62,54 C66,42 70,66 74,54 C78,42 82,66 86,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+
+    <!-- 音符符头（贝塞尔闭合圆） -->
+    <path
+        android:pathData="M78,36 C81.3,36 84,38.7 84,42 C84,45.3 81.3,48 78,48 C74.7,48 72,45.3 72,42 C72,38.7 74.7,36 78,36 Z"
+        android:fillColor="#FFC864" />
+
+    <!-- 音符符干（贝塞尔曲线飘扬） -->
+    <path
+        android:pathData="M84,42 C84,38 84,34 84,30 C87,32 89,30 90,27"
+        android:strokeColor="#FFC864"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- 高光点缀 -->
+    <path
+        android:pathData="M24,40 C26,36 30,33 34,32"
+        android:strokeColor="#5B9BFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>
