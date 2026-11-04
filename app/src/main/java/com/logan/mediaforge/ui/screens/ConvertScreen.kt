@@ -23,7 +23,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -57,6 +56,7 @@ import com.logan.mediaforge.ui.ConvertState
 import com.logan.mediaforge.ui.DropdownField
 import com.logan.mediaforge.ui.InfoRow
 import com.logan.mediaforge.ui.SectionCard
+import com.logan.mediaforge.ui.TrimEditor
 import com.logan.mediaforge.ui.VideoPreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -391,8 +391,8 @@ fun ConvertScreen() {
                     }
                 }
 
-                // -------- 裁剪（滑块 + 输入） --------
-                SectionCard("裁剪（可选）", "拖动滑块两端选择保留区间，实时显示；也可直接输入时间（秒 / mm:ss）") {
+                // -------- 裁剪（可视化时间轴 + 试听 + 输入） --------
+                SectionCard("裁剪（可选）", "拖动滑块选择保留区间 → 点「试听」确认起止点是否满意 → 满意后开始转换；也可直接输入时间（秒 / mm:ss）") {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Text("启用裁剪", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                         Switch(checked = st.trimOn, onCheckedChange = { st.trimOn = it; touch() })
@@ -404,28 +404,40 @@ fun ConvertScreen() {
                             if (durSec > 0f) trimRange = 0f..durSec
                         }
                         if (durSec > 0f) {
-                            RangeSlider(
-                                value = trimRange,
-                                onValueChange = { r ->
+                            TrimEditor(
+                                durationMs = st.mediaInfo!!.durationMs,
+                                mediaUri = st.pickedUri,
+                                range = trimRange,
+                                onRangeChange = { r ->
                                     trimRange = r
                                     st.trimStart = secText(r.start)
                                     st.trimEnd = secText(r.endInclusive)
-                                },
-                                valueRange = 0f..durSec
+                                }
                             )
-                            Text(
-                                "裁剪区间：${fmtMs((trimRange.start * 1000).toLong())} → ${fmtMs((trimRange.endInclusive * 1000).toLong())}，保留 ${fmtMs(((trimRange.endInclusive - trimRange.start) * 1000).toLong())}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text("源时长：${fmtMs(st.mediaInfo!!.durationMs)}（预览播放可帮你确认裁剪位置）",
+                            Text("源时长：${fmtMs(st.mediaInfo!!.durationMs)}${if (st.isVideoSource) "（视频源试听的是视频里的声音）" else ""}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(value = st.trimStart, onValueChange = { st.trimStart = it },
+                            OutlinedTextField(value = st.trimStart, onValueChange = { v ->
+                                st.trimStart = v
+                                parseTimeToSec(v)?.let { s ->
+                                    if (durSec > 0f) {
+                                        val ns = s.toFloat().coerceIn(0f, durSec)
+                                        trimRange = ns..trimRange.endInclusive.coerceAtLeast(ns)
+                                    }
+                                }
+                            },
                                 label = { Text("开始（秒 / mm:ss）") }, singleLine = true, modifier = Modifier.weight(1f))
-                            OutlinedTextField(value = st.trimEnd, onValueChange = { st.trimEnd = it },
+                            OutlinedTextField(value = st.trimEnd, onValueChange = { v ->
+                                st.trimEnd = v
+                                parseTimeToSec(v)?.let { e ->
+                                    if (durSec > 0f) {
+                                        val ne = e.toFloat().coerceIn(0f, durSec)
+                                        trimRange = trimRange.start.coerceAtMost(ne)..ne
+                                    }
+                                }
+                            },
                                 label = { Text("结束（秒 / mm:ss）") }, singleLine = true, modifier = Modifier.weight(1f))
                         }
                     }

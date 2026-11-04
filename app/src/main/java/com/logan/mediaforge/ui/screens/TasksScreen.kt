@@ -27,7 +27,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +47,7 @@ import com.logan.mediaforge.core.TaskStatus
 import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.AudioPlayer
 import com.logan.mediaforge.ui.StatusText
+import com.logan.mediaforge.ui.TrimEditor
 import com.logan.mediaforge.ui.VideoPreview
 
 @Composable
@@ -142,7 +142,7 @@ fun TasksScreen() {
         )
     }
 
-    // 裁剪对话框（滑块选择区间，直观可见）
+    // 裁剪对话框（可视化时间轴 + 试听，所见即所听）
     trimFor?.let { t ->
         val durSec = (t.durationMs / 1000f).coerceAtLeast(0f)
         var range by remember(t.id) {
@@ -156,22 +156,18 @@ fun TasksScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (durSec > 0f) {
-                        Text("拖动两端滑块选择保留区间：",
+                        Text("拖动滑块选择保留区间 → 点「试听」确认起止点是否满意 → 满意后开始裁剪：",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        RangeSlider(
-                            value = range,
-                            onValueChange = {
-                                range = it
-                                startText = String.format(java.util.Locale.US, "%.1f", it.start)
-                                endText = String.format(java.util.Locale.US, "%.1f", it.endInclusive)
-                            },
-                            valueRange = 0f..durSec
-                        )
-                        Text(
-                            "从 ${fmtMs((range.start * 1000).toLong())} 到 ${fmtMs((range.endInclusive * 1000).toLong())}，保留 ${fmtMs(((range.endInclusive - range.start) * 1000).toLong())}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                        TrimEditor(
+                            durationMs = t.durationMs,
+                            mediaPath = t.output?.absolutePath,
+                            range = range,
+                            onRangeChange = { r ->
+                                range = r
+                                startText = String.format(java.util.Locale.US, "%.1f", r.start)
+                                endText = String.format(java.util.Locale.US, "%.1f", r.endInclusive)
+                            }
                         )
                         Text("完整时长：${fmtMs(t.durationMs)}",
                             style = MaterialTheme.typography.bodySmall,
