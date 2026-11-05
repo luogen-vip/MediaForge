@@ -300,13 +300,8 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
                 playing = false
                 pos = dur
             }
-            setOnSeekCompleteListener { mp ->
-                val ps = pendingSeek
-                if (ps >= 0) {
-                    pendingSeek = -1
-                    pos = try { mp.currentPosition } catch (_: Exception) { ps }
-                }
-            }
+            // 注：VideoView 不暴露 OnSeekCompleteListener（那是 MediaPlayer 的 API），
+            // 视频侧 seek 落位靠轮询里的「挂起目标位」机制（见下方 LaunchedEffect）
             setOnErrorListener { _, _, _ ->
                 tryRemux()
                 true
