@@ -50,6 +50,7 @@ import com.logan.mediaforge.core.MediaProbe
 import com.logan.mediaforge.core.TaskRepository
 import com.logan.mediaforge.core.aspectRatioText
 import com.logan.mediaforge.core.channelLayoutCn
+import com.logan.mediaforge.core.colorGamutCn
 import com.logan.mediaforge.core.colorMatrixCn
 import com.logan.mediaforge.core.colorRangeCn
 import com.logan.mediaforge.core.fmtBytes
@@ -93,6 +94,8 @@ fun ConvertScreen() {
 
     // 场景校验对话框（本页局部状态）
     var pendingWarnings by remember { mutableStateOf<List<String>?>(null) }
+    // 双引擎交叉校验警告（防参数被篡改）
+    var crossWarn by remember { mutableStateOf<String?>(null) }
 
     val spec = AudioFormats.byExt(st.ext)
     val extValue = st.ext
@@ -143,6 +146,7 @@ fun ConvertScreen() {
             st.pickedSize = size
             st.detection = det
             st.mediaInfo = info
+            crossWarn = info?.let { withContext(Dispatchers.IO) { MediaProbe.crossCheck(context, uri, it) } }
             st.isVideoSource = det?.category == "VIDEO" || (det == null && videoHint)
             st.toVideo = false
             st.resetParams()
@@ -230,6 +234,10 @@ fun ConvertScreen() {
                     Text("⚠ ${st.detection?.corrupted}", color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
+                crossWarn?.let {
+                    Text(it, color = MaterialTheme.colorScheme.tertiary,
+                        style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
                 InfoRow("真实格式", st.detection?.realName ?: "未知")
                 InfoRow("文件大小", if (st.pickedSize > 0) fmtBytes(st.pickedSize) else "未知")
                 val info = st.mediaInfo
@@ -250,6 +258,7 @@ fun ConvertScreen() {
                             InfoRow("视频位深", "${info.videoBitDepth}bit${if (info.pixFmt != null) "（${info.pixFmt}）" else ""}")
                         if (info.colorSpace != null || info.colorPrimaries != null)
                             InfoRow("色彩空间", colorMatrixCn(info.colorSpace ?: info.colorPrimaries))
+                        InfoRow("色域", colorGamutCn(info.colorPrimaries))
                         if (info.colorRange != null) InfoRow("色彩范围", colorRangeCn(info.colorRange))
                     }
                     if (info.audioCodec != null) {

@@ -32,8 +32,10 @@ import com.logan.mediaforge.core.MediaInfo
 import com.logan.mediaforge.core.MediaProbe
 import com.logan.mediaforge.core.aspectRatioText
 import com.logan.mediaforge.core.channelLayoutCn
+import com.logan.mediaforge.core.colorGamutCn
 import com.logan.mediaforge.core.colorMatrixCn
 import com.logan.mediaforge.core.colorRangeCn
+import com.logan.mediaforge.core.iccGamutCn
 import com.logan.mediaforge.core.fmtBytes
 import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.InfoRow
@@ -53,6 +55,7 @@ fun DetectScreen() {
     var mediaInfo by remember { mutableStateOf<MediaInfo?>(null) }
     var imgSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var imgMeta by remember { mutableStateOf<ImageMeta.Info?>(null) }
+    var crossWarn by remember { mutableStateOf<String?>(null) }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { u ->
         if (u == null) return@rememberLauncherForActivityResult
@@ -86,6 +89,7 @@ fun DetectScreen() {
             size = FileSniffer.querySize(resolver, u)
             det = d
             mediaInfo = mi
+            crossWarn = mi?.let { withContext(Dispatchers.IO) { MediaProbe.crossCheck(context, u, it) } }
             imgSize = isz
             imgMeta = im
         }
@@ -154,6 +158,7 @@ fun DetectScreen() {
                             InfoRow("视频位深", "${mi.videoBitDepth}bit${if (mi.pixFmt != null) "（${mi.pixFmt}）" else ""}")
                         if (mi.colorSpace != null || mi.colorPrimaries != null)
                             InfoRow("色彩空间", colorMatrixCn(mi.colorSpace ?: mi.colorPrimaries))
+                        InfoRow("色域", colorGamutCn(mi.colorPrimaries))
                         if (mi.colorTransfer != null && mi.colorTransfer != "unknown")
                             InfoRow("传递函数", mi.colorTransfer!!)
                         if (mi.colorRange != null) InfoRow("色彩范围", colorRangeCn(mi.colorRange))
@@ -174,7 +179,19 @@ fun DetectScreen() {
                     if (m != null) {
                         InfoRow("位深与色彩模式", m.describe())
                         InfoRow("内嵌色彩空间（ICC）", m.colorSpace ?: "未内嵌（按 sRGB 处理）")
+                        InfoRow("色域", iccGamutCn(m.colorSpace))
                     }
+                }
+            }
+
+            // 双引擎交叉校验：两套独立解析器对不上 = 头部可能被篡改
+            crossWarn?.let {
+                SectionCard("参数真实性校验") {
+                    Text(it, color = MaterialTheme.colorScheme.tertiary,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    Text("未提示则表示 FFprobe 与系统解码器解析一致，参数可信。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

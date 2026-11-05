@@ -1,5 +1,8 @@
 package com.logan.mediaforge.core
 
+import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import com.arthenica.ffmpegkit.FFprobeKit
 
 data class MediaInfo(
@@ -154,5 +157,38 @@ object MediaProbe {
             f == "yuv420" || f == "yuv422" || f == "yuv444" -> 8
             else -> null
         }
+    }
+
+    /**
+     * 双引擎交叉校验（防参数被伪造/篡改）：
+     * FFprobe 与系统 MediaMetadataRetriever 是两套独立解析器，各自读容器头。
+     * 宽高或时长对不上 → 头部信息异常（被改过或文件损坏），返回警告文本并给出两边的真实值；
+     * 一致 → 返回 null。
+     */
+    fun crossCheck(context: Context, uri: Uri, info: MediaInfo): String? = try {
+        val mmr = MediaMetadataRetriever()
+        try {
+            mmr.setDataSource(context, uri)
+            val mw = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+            val mh = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+            val md = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            val problems = mutableListOf<String>()
+            if (mw != null && mh != null && info.width != null && info.height != null &&
+                (mw != info.width || mh != info.height)) {
+                problems.add("分辨率：FFprobe=${info.width}×${info.height}，系统解码器=${mw}×${mh}")
+            }
+            if (md != null && md > 0 && info.durationMs > 0) {
+                val diff = kotlin.math.abs(md - info.durationMs)
+                if (diff > 1500 && diff > md * 0.05) {
+                    problems.add("时长：FFprobe=${fmtMs(info.durationMs)}，系统解码器=${fmtMs(md)}")
+                }
+            }
+            if (problems.isEmpty()) null
+            else "⚠ 元数据交叉校验不一致（头部信息可能被篡改或文件异常，以实际解码为准）：\n" + problems.joinToString("\n")
+        } finally {
+            try { mmr.release() } catch (_: Exception) { }
+        }
+    } catch (e: Exception) {
+        null // 系统解码器读不了不等于有问题（FFprobe 支持的格式更多），不误报
     }
 }

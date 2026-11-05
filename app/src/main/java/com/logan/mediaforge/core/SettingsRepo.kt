@@ -16,4 +16,13 @@ object SettingsRepo {
     fun setFolder(context: Context, key: String, value: String?) {
         prefs(context).edit().putString(key, value).apply()
     }
+
+    // ---- 记住当前页签：进程被系统回收后重新打开，直接回到刚才的页面（不回首页） ----
+    private const val KEY_LAST_TAB = "last_tab"
+
+    fun lastTab(context: Context): String? = prefs(context).getString(KEY_LAST_TAB, null)
+
+    fun setLastTab(context: Context, route: String) {
+        prefs(context).edit().putString(KEY_LAST_TAB, route).apply()
+    }
 }

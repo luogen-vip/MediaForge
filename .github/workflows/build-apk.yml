@@ -44,18 +44,18 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.4.0.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.4.0.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v1.4.1.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v1.4.1.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.4.0.apk
+          path: MediaForge-v1.4.1.apk
 
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.4.0 || gh release create v1.4.0 --title "MediaForge v1.4.0" --notes "v1.4.0 大版本更新（用户建议）：① 识别增强：视频/音频/图片全面解析并显示——宽高比（如 16:9、9:16）、帧率、总码率、视频流码率、音频流码率（有声视频的视频/音频参数分开显示，各自是各自的）、视频/音频位深、像素格式、色彩空间（BT.709/601/2020）、色彩范围；图片显示位深、色彩模式（RGB/RGBA/灰度/索引/CMYK）、内嵌 ICC 色彩空间名（如 sRGB、Display P3），识别页与转换页都显示；② 视频转换新增「画面比例」设置（16:9/9:16/1:1/4:3/3:4/3:2/2:3/21:9）：裁剪填满或黑边适配，输出文件宽高比严格等于所选比例（真实生效）；新增「色彩空间/色彩范围」调整（BT.709/BT.601/BT.2020、TV/PC 范围），FFmpeg 真实转换并写入元数据，可用识别页验证；③ 图片转换新增比例裁剪：预设比例自动居中裁剪 + 自由裁剪（拖动裁剪框：框内移动、四角缩放、空白处画新框），预览所见即所得，输出真实裁剪；④ 重做视频预览：竖屏视频控制按钮不再被遮挡——控制条固定在画面下方任何比例都完整可见，画面按真实宽高比等比显示不变形，播放结束按钮自动复位；⑤ 修复旧版按分辨率档位转码时非 16:9 源被拉伸变形的问题（改为等比适配）。作者：罗根"
-          gh release upload v1.4.0 MediaForge-v1.4.0.apk --clobber
+          gh release view v1.4.1 || gh release create v1.4.1 --title "MediaForge v1.4.1" --notes "v1.4.1 更新（用户反馈）：① 修复视频进度条拖动回跳——拖动时不再被播放进度打断，松手后从所选位置继续播放（转换页上传预览与音频播放同样生效）；② 自由裁剪全新交互：点击「自由裁剪」立即弹出全屏编辑器，单指拖动平移图片、双指捏合缩放，框内显示的就是最终裁剪画面（所见即所得），也可选 1:1/4:3/3:4/16:9/9:16 固定比例或拖四角自由调框，输出真实裁剪；③ 图片比例卡片新增迷你实时预览：选比例或手动输入宽高时不用上滑就能看到输出画面；④ 切到其他 APP 再回来直接恢复刚才的页面（记住页签，不再回到首页重新加载）；⑤ 新增色域显示：视频按 color_primaries 识别 Rec.709/sRGB、Rec.2020 广色域、DCI-P3 等，图片按内嵌 ICC 判断 sRGB/Adobe RGB/Display P3，识别页与转换页都显示；⑥ 参数防伪加强：新增双引擎交叉校验（FFprobe 与系统解码器独立解析），分辨率/时长不一致时明确提示元数据可能被篡改，并列出两边的真实值；⑦ 保留 v1.4.0 全部能力：识别增强（宽高比/帧率/视频音频流码率分开/位深/色彩空间）、视频画面比例与色彩空间真实转换、竖屏视频预览控件不遮挡。作者：罗根"
+          gh release upload v1.4.1 MediaForge-v1.4.1.apk --clobber

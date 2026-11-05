@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,6 +48,9 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     var dur by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var ready by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免回跳
+    var dragging by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    var suppressUntil by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
     val player = remember(mediaPath, mediaUri) {
         MediaPlayer().apply {
             // 关键修复：播放自然结束后，按钮要从「暂停(两条杠)」复位为「播放(三角)」，
@@ -84,7 +88,9 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     }
     LaunchedEffect(playing) {
         while (playing) {
-            try { pos = player.currentPosition } catch (_: Exception) { }
+            if (!dragging && System.currentTimeMillis() >= suppressUntil) {
+                try { pos = player.currentPosition } catch (_: Exception) { }
+            }
             delay(300)
         }
     }
@@ -121,8 +127,13 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             Slider(
                 value = if (dur > 0) pos.toFloat() else 0f,
                 onValueChange = {
+                    dragging = true
                     pos = it.toInt()
-                    try { player.seekTo(it.toInt()) } catch (_: Exception) { }
+                },
+                onValueChangeFinished = {
+                    try { player.seekTo(pos) } catch (_: Exception) { }
+                    suppressUntil = System.currentTimeMillis() + 600
+                    dragging = false
                 },
                 valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
                 modifier = Modifier.weight(1f)
@@ -149,6 +160,9 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     var pos by remember(uri) { mutableIntStateOf(0) }
     var dur by remember(uri) { mutableIntStateOf(0) }
     var failed by remember(uri) { mutableStateOf(false) }
+    // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免拖动后回跳
+    var dragging by remember(uri) { mutableStateOf(false) }
+    var suppressUntil by remember(uri) { mutableLongStateOf(0L) }
     val vv = remember(uri) {
         VideoView(context).apply {
             setVideoURI(uri)
@@ -220,8 +234,13 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
                 Slider(
                     value = if (dur > 0) pos.toFloat() else 0f,
                     onValueChange = {
+                        dragging = true
                         pos = it.toInt()
-                        try { vv?.seekTo(it.toInt()) } catch (_: Exception) { }
+                    },
+                    onValueChangeFinished = {
+                        try { vv?.seekTo(pos) } catch (_: Exception) { }
+                        suppressUntil = System.currentTimeMillis() + 600
+                        dragging = false
                     },
                     valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
                     modifier = Modifier.weight(1f)
@@ -238,7 +257,9 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     // 播放中轮询更新进度
     LaunchedEffect(playing, prepared) {
         while (playing && prepared) {
-            try { pos = vv.currentPosition } catch (_: Exception) { }
+            if (!dragging && System.currentTimeMillis() >= suppressUntil) {
+                try { pos = vv.currentPosition } catch (_: Exception) { }
+            }
             delay(300)
         }
     }

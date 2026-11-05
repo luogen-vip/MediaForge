@@ -423,3 +423,31 @@ fun colorRangeCn(v: String?): String = when (v?.lowercase()) {
     "pc", "jpeg", "full" -> "PC 全范围（0-255）"
     else -> v ?: "未标注"
 }
+
+/** FFmpeg color_primaries → 色域中文名（真实色域按原色定义判断） */
+fun colorGamutCn(primaries: String?): String = when (primaries?.lowercase()) {
+    null, "", "unknown" -> "未标注（多数按 BT.709/sRGB 解读）"
+    "bt709" -> "Rec.709 / sRGB（标准色域）"
+    "bt2020" -> "Rec.2020（广色域，4K/HDR）"
+    "smpte431_2", "dci-p3", "display-p3" -> "DCI-P3（广色域）"
+    "smpte432_1" -> "Display P3（广色域）"
+    "bt470bg" -> "PAL / BT.601（标清）"
+    "smpte170m" -> "NTSC / BT.601（标清）"
+    "bt470m" -> "早期 NTSC（1953）"
+    "film" -> "电影胶片色域"
+    "smpte428" -> "ACES（电影工业）"
+    else -> primaries ?: "未标注"
+}
+
+/** 图片 ICC 描述名 → 色域中文名 */
+fun iccGamutCn(iccName: String?): String {
+    val n = iccName?.lowercase() ?: return "未内嵌 ICC（一般按 sRGB 处理）"
+    return when {
+        n.contains("p3") || n.contains("dci") -> "DCI-P3 / Display P3（广色域）"
+        n.contains("2020") || n.contains("rec2020") -> "Rec.2020（广色域）"
+        n.contains("adobe") -> "Adobe RGB（广色域）"
+        n.contains("prophoto") -> "ProPhoto RGB（超广色域）"
+        n.contains("srgb") || n.contains("iec61966") -> "sRGB（标准色域）"
+        else -> iccName
+    }
+}

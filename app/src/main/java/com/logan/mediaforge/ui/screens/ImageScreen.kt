@@ -89,6 +89,9 @@ fun ImageScreen() {
     val scope = rememberCoroutineScope()
     val st = ImageState
 
+    // 自由裁剪全屏编辑器开关：点击 chip 立即弹出，不用再上滑找框
+    var showFreeCrop by remember { mutableStateOf(false) }
+
     fun onPicked(u: Uri) {
         scope.launch {
             val resolver = context.contentResolver
@@ -237,7 +240,25 @@ fun ImageScreen() {
             }
 
             // ---- 画面比例 / 裁剪 ----
-            SectionCard("画面比例（裁剪）", "选预设比例自动居中裁剪，或选「自由裁剪」拖动预览图上的框；输出宽高比严格等于所选比例") {
+            SectionCard("画面比例（裁剪）", "选预设比例自动居中裁剪，或选「自由裁剪」弹出全屏编辑器；卡片里的迷你预览就是输出画面，不用上滑看图") {
+                // 迷你实时预览：选比例/手动输入宽高时，在这里直接看输出效果（所见即所得）
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(150.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val a = aspect.coerceIn(0.05f, 20f)
+                    var w = maxWidth
+                    var h = w / a
+                    if (h > maxHeight) { h = maxHeight; w = h * a }
+                    val bmpPrev = st.preview
+                    if (bmpPrev != null) {
+                        CropPreviewImage(
+                            bmp = bmpPrev,
+                            cropL = st.cropL, cropT = st.cropT, cropR = st.cropR, cropB = st.cropB,
+                            modifier = Modifier.size(w, h).clip(RoundedCornerShape(8.dp))
+                        )
+                    }
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = st.aspectSel == "原比例",
@@ -260,12 +281,15 @@ fun ImageScreen() {
                     }
                     FilterChip(
                         selected = st.aspectSel == "自由裁剪",
-                        onClick = { st.aspectSel = "自由裁剪" },
+                        onClick = {
+                            st.aspectSel = "自由裁剪"
+                            showFreeCrop = true
+                        },
                         label = { Text("自由裁剪") }
                     )
                 }
                 if (st.aspectSel == "自由裁剪") {
-                    Text("拖动裁剪框内部移动位置，拖四角圆点调整大小；框外的画面会被裁掉",
+                    Text("点击「自由裁剪」会弹出全屏编辑器：单指拖动平移图片、双指捏合缩放，框内就是裁剪结果；上方迷你预览同步变化",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -365,6 +389,26 @@ fun ImageScreen() {
                 },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("开始转换（加入任务）") }
+
+            // ---- 自由裁剪全屏编辑器：单指平移 + 双指缩放图片，框内即结果 ----
+            if (showFreeCrop && st.preview != null) {
+                FreeCropEditor(
+                    bmp = st.preview!!,
+                    initCrop = floatArrayOf(st.cropL, st.cropT, st.cropR, st.cropB),
+                    origW = st.origW, origH = st.origH,
+                    onDismiss = { showFreeCrop = false },
+                    onConfirm = { c ->
+                        st.cropL = c[0]; st.cropT = c[1]; st.cropR = c[2]; st.cropB = c[3]
+                        st.aspectSel = "自由裁剪"
+                        if (st.origW > 0 && st.origH > 0) {
+                            st.wText = ((c[2] - c[0]) * st.origW).roundToInt().toString()
+                            st.hText = ((c[3] - c[1]) * st.origH).roundToInt().toString()
+                        }
+                        st.keepRatio = true
+                        showFreeCrop = false
+                    }
+                )
+            }
         }
     }
 }

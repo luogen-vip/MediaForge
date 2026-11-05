@@ -33,6 +33,7 @@ private data class TabItem(val label: String, val icon: ImageVector, val route: 
 @Composable
 fun AppNav() {
     val nav = rememberNavController()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val tabs = listOf(
         TabItem("转换", Icons.Filled.SwapHoriz, "convert"),
         TabItem("任务", Icons.Filled.TaskAlt, "tasks"),
@@ -41,6 +42,9 @@ fun AppNav() {
         TabItem("识别", Icons.Filled.Search, "detect"),
         TabItem("关于", Icons.Filled.Info, "about")
     )
+    // 启动时回到上次停留的页签：进程被系统回收后重开，不强制回首页
+    val startRoute = tabs.firstOrNull { it.route == com.logan.mediaforge.core.SettingsRepo.lastTab(context) }?.route
+        ?: "convert"
     Scaffold(bottomBar = {
         NavigationBar {
             val current by nav.currentBackStackEntryAsState()
@@ -49,6 +53,7 @@ fun AppNav() {
                 NavigationBarItem(
                     selected = route == t.route,
                     onClick = {
+                        com.logan.mediaforge.core.SettingsRepo.setLastTab(context, t.route)
                         nav.navigate(t.route) {
                             popUpTo(nav.graph.startDestinationId) { saveState = true }
                             launchSingleTop = true
@@ -61,7 +66,7 @@ fun AppNav() {
             }
         }
     }) { pad ->
-        NavHost(nav, startDestination = "convert", modifier = Modifier.padding(pad)) {
+        NavHost(nav, startDestination = startRoute, modifier = Modifier.padding(pad)) {
             composable("convert") { ConvertScreen() }
             composable("tasks") { TasksScreen() }
             composable("image") { ImageScreen() }
