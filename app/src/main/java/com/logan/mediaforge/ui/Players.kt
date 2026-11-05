@@ -64,13 +64,25 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     // seek 异步生效期间的“挂起目标位”：播放器没追上目标前进度条保持目标位，彻底消除前后抖动
     var pendingSeek by remember(mediaPath, mediaUri) { mutableIntStateOf(-1) }
     var seekAt by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
+    // 播放开始时间：MP2/ALAC 等格式系统解码器会「prepare 成功但一播放就悄悄结束」，
+    // 表现为进度条直接跳到最右边、按播放没反应；用「刚开始播放就触发完成」识别这种假完成
+    var playStartAt by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
+    var fallbackTried by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    var errorTick by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }  // 播放失败信号（错误回调/假完成）
+
     val player = remember(mediaPath, mediaUri) {
         MediaPlayer().apply {
             // 关键修复：播放自然结束后，按钮要从「暂停(两条杠)」复位为「播放(三角)」，
             // 进度条停在结尾；再次点播放会从头开始
             setOnCompletionListener {
-                playing = false
-                pos = dur
+                // 「刚按播放就立刻完成」= 系统解码器不支持该编码（MP2/ALAC 等的典型表现），
+                // 不是真的播放完了：走 FFmpeg 解码兜底而不是把进度条打到结尾
+                if (playing && dur > 0 && System.currentTimeMillis() - playStartAt < 900) {
+                    errorTick++
+                } else {
+                    playing = false
+                    pos = dur
+                }
             }
             // seek 真正完成后立即落到播放器实际位置（关键帧），避免拖住目标位再突跳
             setOnSeekCompleteListener { mp ->
@@ -80,7 +92,36 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                     pos = try { mp.currentPosition } catch (_: Exception) { ps }
                 }
             }
+            // 播放中出错（解码器异常等）：同样走兜底，而不是卡死在错误状态
+            setOnErrorListener { _, _, _ ->
+                errorTick++
+                true
+            }
         }
+    }
+
+    // FFmpeg 离线解码兜底：把系统播放器放不了的音频解码成 WAV 再预览，不额外损失音质
+    suspend fun decodeFallback(): Boolean {
+        val input = mediaPath
+            ?: mediaUri?.let { if (it.scheme == "file") it.path else FFmpegKitConfig.getSafParameterForRead(context, it) }
+            ?: return false
+        val key = (mediaPath ?: mediaUri.toString())
+        val wav = File(context.cacheDir, "mf_preview_" + kotlin.math.abs(key.hashCode().toLong()) + ".wav")
+        return try {
+            val session = withContext(Dispatchers.IO) {
+                FFmpegKit.executeWithArguments(
+                    arrayOf("-y", "-i", input, "-vn", "-c:a", "pcm_s16le", "-f", "wav", wav.absolutePath)
+                )
+            }
+            if (ReturnCode.isSuccess(session.returnCode) && wav.exists() && wav.length() > 0) {
+                try {
+                    player.reset()
+                    player.setDataSource(wav.absolutePath)
+                    player.prepare()
+                    true
+                } catch (e: Exception) { false }
+            } else false
+        } catch (e: Exception) { false }
     }
 
     LaunchedEffect(mediaPath, mediaUri) {
@@ -92,7 +133,19 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                 dur = player.duration
                 ready = true
             } catch (e: Exception) {
-                failed = true
+                // prepare 就失败：直接尝试 FFmpeg 解码兜底
+                if (!fallbackTried) {
+                    fallbackTried = true
+                    decoding = true
+                    if (decodeFallback()) {
+                        dur = player.duration
+                        ready = true
+                        decoding = false
+                    } else {
+                        decoding = false
+                        failed = true
+                    }
+                } else failed = true
             }
         } else if (path != null) {
             var ok = try {
@@ -103,25 +156,11 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                 try { player.reset() } catch (_: Exception) { }
                 false
             }
-            // 系统播放器不支持（AC3/WMA/AIFF 等编码）→ FFmpeg 解码成 WAV 再预览，不额外损失音质
-            if (!ok) {
+            // 系统播放器不支持（AC3/WMA/MP2/ALAC/AIFF 等）→ FFmpeg 解码成 WAV 再预览
+            if (!ok && !fallbackTried) {
+                fallbackTried = true
                 decoding = true
-                try {
-                    val wav = File(context.cacheDir, "mf_preview_" + kotlin.math.abs(path.hashCode().toLong()) + ".wav")
-                    val session = withContext(Dispatchers.IO) {
-                        FFmpegKit.executeWithArguments(
-                            arrayOf("-y", "-i", path, "-vn", "-c:a", "pcm_s16le", "-f", "wav", wav.absolutePath)
-                        )
-                    }
-                    if (ReturnCode.isSuccess(session.returnCode) && wav.exists() && wav.length() > 0) {
-                        ok = try {
-                            player.reset()
-                            player.setDataSource(wav.absolutePath)
-                            player.prepare()
-                            true
-                        } catch (e: Exception) { false }
-                    }
-                } catch (_: Exception) { }
+                ok = decodeFallback()
                 decoding = false
             }
             if (ok) {
@@ -132,12 +171,41 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             }
         }
     }
+
+    // 播放失败恢复：错误回调 / 刚播放就假完成 → FFmpeg 解码兜底后自动续播
+    LaunchedEffect(errorTick) {
+        if (errorTick == 0) return@LaunchedEffect
+        playing = false
+        pendingSeek = -1
+        if (fallbackTried) {
+            // 已兜底过仍失败：给用户明确友好的提示（文件本身不受影响）
+            failed = true
+            return@LaunchedEffect
+        }
+        fallbackTried = true
+        decoding = true
+        val ok = decodeFallback()
+        decoding = false
+        if (ok) {
+            dur = player.duration
+            ready = true
+            pos = 0
+            try {
+                player.start()
+                playStartAt = System.currentTimeMillis()
+                playing = true
+            } catch (_: Exception) { }
+        } else {
+            failed = true
+        }
+    }
     DisposableEffect(mediaPath, mediaUri) {
         onDispose { try { player.release() } catch (_: Exception) { } }
     }
     LaunchedEffect(ready, autoPlay) {
         if (ready && autoPlay) {
             try {
+                playStartAt = System.currentTimeMillis()
                 player.start()
                 playing = true
             } catch (_: Exception) { }
@@ -174,6 +242,7 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             } else {
                 try {
                     if (dur > 0 && pos >= dur - 200) player.seekTo(0)
+                    playStartAt = System.currentTimeMillis()
                     player.start()
                     playing = true
                 } catch (_: Exception) { }

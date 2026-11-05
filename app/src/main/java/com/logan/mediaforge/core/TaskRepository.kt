@@ -402,18 +402,20 @@ object TaskRepository {
     fun startInpaint(
         uri: Uri, displayName: String,
         rects: List<InpaintEngine.BoxRect>, strokes: List<InpaintEngine.Stroke>,
-        outFmt: String = "follow"                       // follow=跟随原图 / png / jpg / webp
+        outFmt: String = "follow",                       // follow=跟随原图 / png / jpg / webp
+        transparentMode: Boolean = false                 // 透明模式：水印区域恢复完全透明（仅 PNG/WebP 输出）
     ) {
         val id = counter.getAndIncrement()
         val hasModel = InpaintEngine.modelAvailable(appContext)
         val engineName = if (hasModel) "LaMa AI 模型" else "内置智能填充"
         val fmtLabel = if (outFmt == "follow") "跟随原图" else outFmt.uppercase()
+        val modeDesc = if (transparentMode) " · 透明模式（水印区域恢复透明）" else ""
         add(
             ConvertTask(
                 id = id, kind = TaskKind.IMAGE, typeName = "图片去水印",
                 sourceName = displayName, sourceReal = "",
                 fromExt = displayName.substringAfterLast('.', "?"), toExt = fmtLabel,
-                detail = "框选×${rects.size} · 涂抹×${strokes.size} · 引擎：$engineName · 导出：$fmtLabel",
+                detail = "框选×${rects.size} · 涂抹×${strokes.size} · 引擎：$engineName · 导出：$fmtLabel$modeDesc",
                 status = TaskStatus.IMPORTING, phase = "导入源图片", progress = 0f
             )
         )
@@ -437,20 +439,32 @@ object TaskRepository {
                     it.copy(sourceReal = det?.realName ?: "未知", phase = "修复中")
                 }
                 // 决定导出格式：跟随原图时 JPG/PNG/WebP 原格式回写（分辨率不变，只去水印）；
-                // HEIC/GIF/BMP/TIFF 等系统无法原样回写 → 自动回退 PNG 并在任务里提示
+                // HEIC/GIF/BMP/TIFF 等系统无法原样回写 → 自动回退 PNG 并在任务里提示。
+                // 透明模式下只允许 PNG/WebP（JPG 丢弃透明通道），跟随原图时同样按此限制
                 val realExt = det?.realExt ?: ""
-                val canFollow = realExt == "jpg" || realExt == "png" || realExt == "webp"
-                val target = if (outFmt == "follow") (if (canFollow) realExt else "png") else outFmt
-                val fallbackNote = if (outFmt == "follow" && !canFollow)
-                    "原格式 ${det?.realName ?: "未知"} 无法原样回写，已导出 PNG" else ""
+                val srcHasAlpha = bmp.hasAlpha()
+                var target = if (outFmt == "follow") {
+                    if (realExt == "jpg" || realExt == "png" || realExt == "webp") realExt else "png"
+                } else outFmt
+                val fallbackNotes = mutableListOf<String>()
+                if (outFmt == "follow" && !(realExt == "jpg" || realExt == "png" || realExt == "webp"))
+                    fallbackNotes.add("原格式 ${det?.realName ?: "未知"} 无法原样回写，已导出 PNG")
+                if (transparentMode) {
+                    if (target == "jpg") {
+                        target = "png"
+                        fallbackNotes.add("透明模式不支持 JPG，已导出 PNG（JPG 会丢失透明通道）")
+                    } else if (outFmt == "follow" && realExt != "png" && realExt != "webp") {
+                        fallbackNotes.add("透明模式仅支持 PNG/WebP，已导出 PNG")
+                    }
+                }
                 update(id) {
                     it.copy(toExt = target, detail = it.detail + " → ${target.uppercase()}")
                 }
-                result = InpaintEngine.inpaint(appContext, bmp, rects, strokes) { p, ph ->
+                result = InpaintEngine.inpaint(appContext, bmp, rects, strokes, { p, ph ->
                     update(id) {
                         if (it.status == TaskStatus.RUNNING) it.copy(progress = p.coerceIn(0.05f, 0.95f), phase = ph) else it
                     }
-                }
+                }, transparentOut = transparentMode)
                 bmp.recycle()
                 if (isCanceled(id)) return@launch
                 if (result == null) {
@@ -463,8 +477,13 @@ object TaskRepository {
                     when (target) {
                         "jpg" -> result!!.compress(Bitmap.CompressFormat.JPEG, 95, fos)
                         "webp" -> result!!.compress(
-                            if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
-                            else Bitmap.CompressFormat.WEBP, 95, fos
+                            // 透明模式下用无损 WebP，保证透明通道不劣化
+                            if (transparentMode) {
+                                if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSLESS
+                                else Bitmap.CompressFormat.WEBP
+                            } else if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+                            else Bitmap.CompressFormat.WEBP,
+                            if (transparentMode) 100 else 95, fos
                         )
                         else -> result!!.compress(Bitmap.CompressFormat.PNG, 100, fos)
                     }
@@ -484,12 +503,95 @@ object TaskRepository {
                         status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
                         output = out,
                         outputInfo = "${result!!.width}×${result!!.height} · ${target.uppercase()}" +
-                            (if (fallbackNote.isNotEmpty()) " · $fallbackNote" else "") +
+                            (if (fallbackNotes.isNotEmpty()) " · " + fallbackNotes.joinToString("；") else "") +
+                            (if (transparentMode && srcHasAlpha) " · 水印区域已恢复完全透明" else "") +
                             " · " + fmtBytes(out.length())
                     )
                 }
             } catch (e: OutOfMemoryError) {
                 fail(id, "内存不足：图片过大或区域过大，请稍后重试")
+            } catch (e: Exception) {
+                fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
+            } finally {
+                result?.recycle()
+            }
+        }
+    }
+
+    // ==================== AI 抠图（U2Net / 内置算法，完全离线，输出透明 PNG） ====================
+
+    fun startMatting(
+        uri: Uri, displayName: String,
+        keep: List<InpaintEngine.Stroke>, erase: List<InpaintEngine.Stroke>,
+        excludeMarks: Boolean
+    ) {
+        val id = counter.getAndIncrement()
+        add(
+            ConvertTask(
+                id = id, kind = TaskKind.IMAGE, typeName = "AI 抠图",
+                sourceName = displayName, sourceReal = "",
+                fromExt = displayName.substringAfterLast('.', "?"), toExt = "PNG",
+                detail = "保留涂抹×${keep.size} · 擦除涂抹×${erase.size} · " +
+                    (if (excludeMarks) "智能排除水印/LOGO：开" else "智能排除水印/LOGO：关") + " · 导出：PNG（透明）",
+                status = TaskStatus.IMPORTING, phase = "导入源图片", progress = 0f
+            )
+        )
+        scope.launch {
+            var result: Bitmap? = null
+            try {
+                val src = importUri(id, uri, displayName)
+                if (isCanceled(id)) return@launch
+                if (src == null || !src.exists() || src.length() == 0L) {
+                    fail(id, "导入源图片失败（文件不可读或为空）")
+                    return@launch
+                }
+                update(id) { if (it.status == TaskStatus.IMPORTING) it.copy(status = TaskStatus.RUNNING, phase = "解码图片", progress = 0.03f) else it }
+                // 抠图蒙版全程浮点运算，像素上限更保守，防低内存设备 OOM
+                val bmp = decodeBitmapCapped(src, 14_000_000L)
+                if (bmp == null) {
+                    fail(id, "图片解码失败（文件可能已损坏或不是可识别的图片）")
+                    return@launch
+                }
+                val det = FileSniffer.detect(src)
+                update(id) { it.copy(sourceReal = det?.realName ?: "未知", phase = "抠图中") }
+                val r = MattingEngine.matting(appContext, bmp, keep, erase, excludeMarks) { p, ph ->
+                    update(id) {
+                        if (it.status == TaskStatus.RUNNING) it.copy(progress = p.coerceIn(0.05f, 0.95f), phase = ph) else it
+                    }
+                }
+                bmp.recycle()
+                if (isCanceled(id)) return@launch
+                if (r == null) {
+                    fail(id, "抠图失败：图片无法解码或引擎异常，请重试")
+                    return@launch
+                }
+                result = r.bitmap
+                update(id) { it.copy(phase = "保存结果", progress = 0.97f) }
+                val out = uniqueOut("png")
+                val ok = out.outputStream().use { fos ->
+                    // 抠图结果必须 PNG：JPG 无透明通道，直接锁死
+                    result!!.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                }
+                if (!ok || !out.exists() || out.length() == 0L) {
+                    fail(id, "保存结果失败")
+                    return@launch
+                }
+                val det2 = FileSniffer.detect(out)
+                if (det2 == null || det2.realExt != "png") {
+                    fail(id, "输出校验失败：实际格式为 ${det2?.realName ?: "未知"}，与目标 PNG 不符")
+                    return@launch
+                }
+                update(id) {
+                    it.copy(
+                        status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
+                        output = out,
+                        outputInfo = "${result!!.width}×${result!!.height} · PNG（透明） · 引擎：${r.engine}" +
+                            (if (excludeMarks && r.removedMarks > 0) " · 已剔除 ${r.removedMarks} 处疑似水印/LOGO 区域" else "") +
+                            " · " + fmtBytes(out.length())
+                    )
+                }
+            } catch (e: OutOfMemoryError) {
+                fail(id, "内存不足：图片过大，请稍后重试")
             } catch (e: Exception) {
                 fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
             } finally {

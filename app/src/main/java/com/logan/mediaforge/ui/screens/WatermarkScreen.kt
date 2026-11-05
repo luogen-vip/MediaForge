@@ -7,7 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +27,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,7 +45,10 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.pointer.awaitFirstDown
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -66,6 +70,9 @@ object WatermarkState {
     var name by mutableStateOf("")
     var size by mutableStateOf(0L)
     var detRealName by mutableStateOf("")
+    var realExt by mutableStateOf("")                 // 真实格式扩展名（jpg/png/webp/heic…）
+    var hasAlpha by mutableStateOf(false)             // 检测到透明通道（透明图片）
+    var transparentMode by mutableStateOf(false)      // 透明模式：水印区域恢复完全透明
     var preview by mutableStateOf<Bitmap?>(null)
     var origW by mutableStateOf(0)
     var origH by mutableStateOf(0)
@@ -77,7 +84,8 @@ object WatermarkState {
     val strokes = mutableStateListOf<InpaintEngine.Stroke>()
 
     fun resetSource() {
-        uri = null; name = ""; size = 0; detRealName = ""
+        uri = null; name = ""; size = 0; detRealName = ""; realExt = ""; hasAlpha = false
+        transparentMode = false
         preview = null; origW = 0; origH = 0
         box = null
         strokes.clear()
@@ -106,12 +114,26 @@ fun WatermarkScreen() {
             val d = withContext(Dispatchers.IO) {
                 try { FileSniffer.detect(resolver, u, n.substringAfterLast('.', ""))?.realName } catch (_: Exception) { null }
             }
+            val ext = withContext(Dispatchers.IO) {
+                try { FileSniffer.detect(resolver, u, n.substringAfterLast('.', ""))?.realExt ?: "" } catch (_: Exception) { "" }
+            }
             val wh = withContext(Dispatchers.IO) { ImageEngine.decodeSize(context, u) }
             val bmp = withContext(Dispatchers.IO) { ImageEngine.decodePreview(context, u, 1440) }
+            // 透明通道检测：预览图逐像素扫描是否存在半透明/全透明像素
+            val alpha = withContext(Dispatchers.IO) {
+                if (bmp == null || !bmp.hasAlpha()) false else try {
+                    val px = IntArray(bmp.width * bmp.height)
+                    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                    px.any { (it ushr 24) < 250 }
+                } catch (_: Exception) { false }
+            }
             st.uri = u
             st.name = n
             st.size = try { FileSniffer.querySize(resolver, u) } catch (_: Exception) { 0L }
             st.detRealName = d ?: "未知"
+            st.realExt = ext
+            st.hasAlpha = alpha
+            st.transparentMode = false
             st.preview = bmp
             st.origW = wh?.first ?: 0
             st.origH = wh?.second ?: 0
@@ -179,7 +201,11 @@ fun WatermarkScreen() {
                         Toast.makeText(context, "请先框选或涂抹要去除的水印区域", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
-                    TaskRepository.startInpaint(u, st.name, st.box?.let { listOf(it) } ?: emptyList(), st.strokes.toList(), st.outFmt)
+                    TaskRepository.startInpaint(
+                        u, st.name,
+                        st.box?.let { listOf(it) } ?: emptyList(), st.strokes.toList(),
+                        st.outFmt, st.transparentMode
+                    )
                     Toast.makeText(context, "去水印任务已创建，请到「任务」页查看进度，完成后可下载", Toast.LENGTH_LONG).show()
                 },
                 enabled = hasMask,
@@ -191,8 +217,42 @@ fun WatermarkScreen() {
                     color = MaterialTheme.colorScheme.tertiary)
             }
 
-            // 导出格式下拉：默认跟随原图，只去水印不改格式；手动指定则真实重新编码
-            val fmtOptions = listOf(
+            // ---- 透明模式（透明图片专用）----
+            // JPG 无透明通道：隐藏开关并说明；PNG/WebP 等可开启，开启后输出锁 PNG/WebP，
+            // 被涂抹/框选的水印区域不再补画面，而是直接恢复为完全透明
+            val isJpgSource = st.realExt == "jpg"
+            if (isJpgSource) {
+                Text(
+                    "检测到原图为 JPG：JPG 不支持透明通道，透明模式不可用（透明图片请使用 PNG/WebP/HEIC 等格式）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("水印区域恢复透明（透明图片专用）", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (st.hasAlpha) "已检测到透明通道：开启后水印区域直接变完全透明，不再用画面填补"
+                            else "透明 LOGO / 免抠图去水印：开启后涂抹处直接变完全透明（不补画面）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = st.transparentMode, onCheckedChange = {
+                        st.transparentMode = it
+                        // 透明模式锁定支持透明通道的格式：JPG 自动切回 PNG
+                        if (it && st.outFmt == "jpg") st.outFmt = "png"
+                    })
+                }
+            }
+
+            // 导出格式下拉：默认跟随原图，只去水印不改格式；手动指定则真实重新编码。
+            // 透明模式下只提供 PNG/WebP（保留透明通道），JPG 会把透明区域变成白底/黑底
+            val fmtOptions = if (st.transparentMode) listOf(
+                "follow" to "跟随原图格式（仅 PNG/WebP 可保持）",
+                "png" to "PNG（推荐）",
+                "webp" to "WebP（无损）"
+            ) else listOf(
                 "follow" to "跟随原图格式",
                 "png" to "PNG",
                 "jpg" to "JPG",
@@ -213,10 +273,14 @@ fun WatermarkScreen() {
                 }
             }
             Text(
-                if (st.outFmt == "follow")
-                    "原图是 JPG/PNG/WebP 时按原格式导出（分辨率不变，只去水印）；HEIC/GIF/BMP/TIFF 等系统无法原样回写的格式会自动导出 PNG，并在任务里提示。"
-                else
-                    "以所选格式真实重新编码导出（非改后缀，导出后会校验真实格式），分辨率与原图一致。",
+                when {
+                    st.transparentMode ->
+                        "透明模式：水印区域直接完全透明（其余部分透明状态原样保留），输出真实 PNG/无损 WebP；原图非 PNG/WebP 时自动导出 PNG。"
+                    st.outFmt == "follow" ->
+                        "原图是 JPG/PNG/WebP 时按原格式导出（分辨率不变，只去水印）；HEIC/GIF/BMP/TIFF 等系统无法原样回写的格式会自动导出 PNG，并在任务里提示。"
+                    else ->
+                        "以所选格式真实重新编码导出（非改后缀，导出后会校验真实格式），分辨率与原图一致。"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -312,95 +376,117 @@ private fun MaskEditor(
         Canvas(
             Modifier
                 .fillMaxSize()
-                .pointerInput(bmp) {
-                    detectDragGestures(
-                        onDragStart = { pos ->
-                            if (WatermarkState.brushMode) {
-                                dragMode = DragMode.PAINT
-                                ptsBuf.clear()
-                                ptsBuf.add(toNorm(pos))
-                            } else {
-                                val b = WatermarkState.box
-                                if (b == null) {
-                                    // 没有框：拖动任意位置画新框
-                                    dragMode = DragMode.NEW_BOX
+                .pointerInput(bmp, WatermarkState.brushMode) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val start = down.position
+                        val stW = WatermarkState
+                        val insideImage = start.x >= offX && start.x <= offX + drawW &&
+                            start.y >= offY && start.y <= offY + drawH
+
+                        // ---- 手势归属判定：与页面滚动不打架 ----
+                        // 只有「落在图片内容上的单指手势」才属于编辑（框选/涂抹）；
+                        // 图片外的空白、已有框时的框外区域，全部放行给外层 verticalScroll，
+                        // 从图片四周/框外滑动就能滚动页面，不再必须从图片下面滑。
+                        fun hitBoxMode(): DragMode? {
+                            val b = stW.box ?: return DragMode.NEW_BOX
+                            val idx = (0..3).firstOrNull { i ->
+                                val c = cornerPx(b, i)
+                                abs(start.x - c.x) <= handleR * 1.6f && abs(start.y - c.y) <= handleR * 1.6f
+                            }
+                            return when (idx) {
+                                0 -> DragMode.RESIZE_TL
+                                1 -> DragMode.RESIZE_TR
+                                2 -> DragMode.RESIZE_BL
+                                3 -> DragMode.RESIZE_BR
+                                else -> {
+                                    val insideBox = start.x >= offX + b.l * drawW && start.x <= offX + b.r * drawW &&
+                                        start.y >= offY + b.t * drawH && start.y <= offY + b.b * drawH
+                                    if (insideBox) DragMode.MOVE_BOX else null
+                                }
+                            }
+                        }
+                        val mode: DragMode? = when {
+                            !insideImage -> null
+                            stW.brushMode -> DragMode.PAINT
+                            else -> hitBoxMode()
+                        }
+
+                        if (mode == null) {
+                            // 不消费任何事件：页面滚动接管，同时点按也不会误建框
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if (ev.changes.all { it.changedToUp() }) break
+                            }
+                            return@awaitEachGesture
+                        }
+
+                        // ---- 编辑手势：手动拖动循环（等价 detectDragGestures，可精确控制消费时机）----
+                        fun beginEdit(pos: Offset) {
+                            dragMode = mode
+                            when (mode) {
+                                DragMode.PAINT -> {
+                                    ptsBuf.clear()
+                                    ptsBuf.add(toNorm(pos))
+                                }
+                                DragMode.NEW_BOX -> {
                                     val n = toNorm(pos)
                                     WatermarkState.box = InpaintEngine.BoxRect(n.first, n.second, n.first, n.second)
                                     anchor = Offset(n.first, n.second)
-                                } else {
-                                    val idx = (0..3).firstOrNull { i ->
-                                        val c = cornerPx(b, i)
-                                        abs(pos.x - c.x) <= handleR * 1.6f && abs(pos.y - c.y) <= handleR * 1.6f
-                                    }
-                                    dragMode = when (idx) {
-                                        0 -> DragMode.RESIZE_TL
-                                        1 -> DragMode.RESIZE_TR
-                                        2 -> DragMode.RESIZE_BL
-                                        3 -> DragMode.RESIZE_BR
-                                        else -> null
-                                    }
-                                    if (dragMode == null) {
-                                        val inside = pos.x >= offX + b.l * drawW && pos.x <= offX + b.r * drawW &&
-                                            pos.y >= offY + b.t * drawH && pos.y <= offY + b.b * drawH
-                                        if (inside) {
-                                            // 框内部 → 拖动移动整个框
-                                            dragMode = DragMode.MOVE_BOX
-                                            moveBase = b
-                                            anchor = pos
-                                        }
-                                        // 框外部 → 不动作：点击/拖动其它位置不再把框“跳”过去；
-                                        // 要重画请先点「清除框选」再拖动
-                                    }
                                 }
+                                DragMode.MOVE_BOX -> {
+                                    moveBase = WatermarkState.box
+                                    anchor = pos
+                                }
+                                else -> { }
                             }
-                        },
-                        onDrag = { change, _ ->
-                            val p = change.position
-                            when (dragMode) {
+                        }
+                        fun moveEdit(pos: Offset) {
+                            when (mode) {
                                 DragMode.PAINT -> {
-                                    ptsBuf.add(toNorm(p))
+                                    ptsBuf.add(toNorm(pos))
                                     paintTick++
                                 }
                                 DragMode.NEW_BOX -> {
-                                    val n = toNorm(p)
+                                    val n = toNorm(pos)
                                     WatermarkState.box = InpaintEngine.BoxRect(anchor.x, anchor.y, n.first, n.second)
                                 }
                                 DragMode.MOVE_BOX -> {
-                                    val base = moveBase ?: return@detectDragGestures
-                                    val dx = ((p.x - anchor.x) / drawW).coerceIn(-base.l, 1f - base.r)
-                                    val dy = ((p.y - anchor.y) / drawH).coerceIn(-base.t, 1f - base.b)
+                                    val base = moveBase ?: return
+                                    val dx = ((pos.x - anchor.x) / drawW).coerceIn(-base.l, 1f - base.r)
+                                    val dy = ((pos.y - anchor.y) / drawH).coerceIn(-base.t, 1f - base.b)
                                     WatermarkState.box = InpaintEngine.BoxRect(base.l + dx, base.t + dy, base.r + dx, base.b + dy)
                                 }
                                 DragMode.RESIZE_TL -> {
-                                    val n = toNorm(p)
-                                    val b = WatermarkState.box ?: return@detectDragGestures
+                                    val n = toNorm(pos)
+                                    val b = WatermarkState.box ?: return
                                     WatermarkState.box = InpaintEngine.BoxRect(n.first, n.second, b.r, b.b)
                                 }
                                 DragMode.RESIZE_TR -> {
-                                    val n = toNorm(p)
-                                    val b = WatermarkState.box ?: return@detectDragGestures
+                                    val n = toNorm(pos)
+                                    val b = WatermarkState.box ?: return
                                     WatermarkState.box = InpaintEngine.BoxRect(b.l, n.second, n.first, b.b)
                                 }
                                 DragMode.RESIZE_BL -> {
-                                    val n = toNorm(p)
-                                    val b = WatermarkState.box ?: return@detectDragGestures
+                                    val n = toNorm(pos)
+                                    val b = WatermarkState.box ?: return
                                     WatermarkState.box = InpaintEngine.BoxRect(n.first, b.t, b.r, n.second)
                                 }
                                 DragMode.RESIZE_BR -> {
-                                    val n = toNorm(p)
-                                    val b = WatermarkState.box ?: return@detectDragGestures
+                                    val n = toNorm(pos)
+                                    val b = WatermarkState.box ?: return
                                     WatermarkState.box = InpaintEngine.BoxRect(b.l, b.t, n.first, n.second)
                                 }
                                 null -> { }
                             }
-                        },
-                        onDragEnd = {
-                            if (dragMode == DragMode.PAINT) {
+                        }
+                        fun finishEdit() {
+                            if (mode == DragMode.PAINT) {
                                 val pts = ptsBuf.toList()
                                 if (pts.size >= 2)
                                     onStrokeDone(InpaintEngine.Stroke(pts, WatermarkState.brushPct / 100f / 2f))
                                 ptsBuf.clear()
-                            } else if (dragMode != null) {
+                            } else if (mode != null) {
                                 // 规整化：保证 l<r、t<b，且太小则丢弃
                                 val b = WatermarkState.box
                                 if (b != null) {
@@ -412,13 +498,48 @@ private fun MaskEditor(
                             }
                             dragMode = null
                             moveBase = null
-                        },
-                        onDragCancel = {
-                            ptsBuf.clear()
-                            dragMode = null
-                            moveBase = null
                         }
-                    )
+
+                        var started = false
+                        val slop = viewConfiguration.touchSlop
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val ch = ev.changes.firstOrNull { it.id == down.id }
+                            if (ch == null) {
+                                if (ev.changes.all { it.changedToUp() }) break else continue
+                            }
+                            if (ev.changes.size > 1) {
+                                // 第二根手指按下 = 用户想滚动页面：放弃本次编辑，放行给滚动
+                                if (started && mode == DragMode.PAINT) ptsBuf.clear()
+                                if (started && mode != DragMode.PAINT) {
+                                    dragMode = null; moveBase = null
+                                } else {
+                                    dragMode = null
+                                }
+                                break
+                            }
+                            if (!started) {
+                                val d = ch.position - start
+                                if (kotlin.math.hypot(d.x.toDouble(), d.y.toDouble()) > slop) {
+                                    started = true
+                                    beginEdit(ch.position)
+                                } else if (ch.changedToUp()) {
+                                    break
+                                }
+                            }
+                            if (started) {
+                                if (ch.positionChange() != Offset.Zero) {
+                                    moveEdit(ch.position)
+                                    ch.consume()
+                                }
+                            }
+                            if (ch.changedToUp()) {
+                                if (started) finishEdit()
+                                break
+                            }
+                        }
+                        if (!started) { dragMode = null; moveBase = null; ptsBuf.clear() }
+                    }
                 }
         ) {
             clipRect(offX, offY, offX + drawW, offY + drawH) {

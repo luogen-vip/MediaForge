@@ -81,6 +81,8 @@ object InpaintEngine {
 
     /**
      * 执行去水印。
+     * @param transparentOut 透明模式：被涂抹/框选的水印区域不补画面，而是恢复为完全透明
+     *                       （用于带透明通道的图片，如透明 LOGO 去角标水印），边缘做羽化过渡
      * @param onProgress (进度0..1, 阶段描述)
      * @return 与原图同分辨率的修复结果；失败返回 null
      */
@@ -89,7 +91,8 @@ object InpaintEngine {
         src: Bitmap,
         rects: List<BoxRect>,
         strokes: List<Stroke>,
-        onProgress: (Float, String) -> Unit
+        onProgress: (Float, String) -> Unit,
+        transparentOut: Boolean = false
     ): Bitmap? {
         val bounds = computeBounds(src.width, src.height, rects, strokes) ?: return null
         onProgress(0.08f, "定位水印区域")
@@ -115,6 +118,39 @@ object InpaintEngine {
         if (mask == null) {
             roi.recycle()
             return null
+        }
+
+        if (transparentOut) {
+            // 透明模式：不需要补画面，水印区域直接恢复完全透明（跳过 AI 修复推理）。
+            // 按羽化蒙版把 alpha 打掉：蒙版核心=0 完全透明，边缘渐变过渡，
+            // 其余区域的原 alpha 原样保留（透明 LOGO 主体不受影响）。
+            onProgress(0.5f, "恢复透明")
+            if (src.isRecycled) {
+                mask.recycle(); roi.recycle()
+                return null
+            }
+            val result = src.copy(Bitmap.Config.ARGB_8888, true)
+            val feather = featheredMask(mask)
+            val kill = if (scale < 1f) Bitmap.createScaledBitmap(feather, rw0, rh0, true) else feather
+            val kpx = IntArray(rw0 * rh0)
+            kill.getPixels(kpx, 0, rw0, 0, 0, rw0, rh0)
+            val rpx = IntArray(rw0 * rh0)
+            result.getPixels(rpx, 0, rw0, rx, ry, rw0, rh0)
+            for (i in rpx.indices) {
+                val f = kpx[i] ushr 24
+                if (f > 0) {
+                    val a = rpx[i] ushr 24
+                    val na = a * (255 - f) / 255
+                    rpx[i] = (na shl 24) or (rpx[i] and 0x00FFFFFF)
+                }
+            }
+            result.setPixels(rpx, 0, rw0, rx, ry, rw0, rh0)
+            if (kill !== feather) kill.recycle()
+            feather.recycle()
+            mask.recycle()
+            roi.recycle()
+            onProgress(0.95f, "完成")
+            return result
         }
 
         onProgress(0.15f, "修复中")

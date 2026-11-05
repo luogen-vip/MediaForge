@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.logan.mediaforge.core.FileSniffer
 import com.logan.mediaforge.core.ImageEngine
 import com.logan.mediaforge.core.ImageMeta
+import com.logan.mediaforge.core.MattingEngine
 import com.logan.mediaforge.core.TaskRepository
 import com.logan.mediaforge.core.aspectRatioText
 import com.logan.mediaforge.core.fmtBytes
@@ -91,6 +92,8 @@ fun ImageScreen() {
 
     // 自由裁剪全屏编辑器开关：点击 chip 立即弹出，不用再上滑找框
     var showFreeCrop by remember { mutableStateOf(false) }
+    // AI 抠图全屏编辑器开关（图片页内置入口，输出透明 PNG）
+    var showMatting by remember { mutableStateOf(false) }
 
     fun onPicked(u: Uri) {
         scope.launch {
@@ -413,6 +416,33 @@ fun ImageScreen() {
                 onClick = { startConversion() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("开始转换（加入任务）") }
+
+            // ---- AI 抠图（透明背景）：与图片工具同页，一键进入全屏编辑器 ----
+            SectionCard("AI 抠图（透明背景）", "自动识别主体，人物/动物/花草/物品通用，背景变完全透明") {
+                Text(
+                    "一键抠出主体输出透明 PNG；支持手动涂抹保留/擦除精修，可智能排除 AI 水印文字、平台 LOGO、作者署名等贴边小区域。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = { showMatting = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("打开 AI 抠图") }
+            }
+
+            // ---- AI 抠图全屏编辑器：点「开始抠图」直接创建任务 ----
+            if (showMatting && st.preview != null && st.uri != null) {
+                MattingEditor(
+                    bmp = st.preview!!,
+                    modelAvailable = MattingEngine.modelAvailable(context),
+                    onDismiss = { showMatting = false },
+                    onStart = { keep, erase, excludeMarks ->
+                        TaskRepository.startMatting(st.uri!!, st.name, keep, erase, excludeMarks)
+                        Toast.makeText(context, "抠图任务已创建，请到「任务」页查看进度与下载", Toast.LENGTH_LONG).show()
+                        showMatting = false
+                    }
+                )
+            }
 
             // ---- 自由裁剪全屏编辑器：单指平移 + 双指缩放图片，框内即结果 ----
             if (showFreeCrop && st.preview != null) {
