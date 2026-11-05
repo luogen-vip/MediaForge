@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
@@ -34,8 +35,11 @@ jobs:
       - name: Build APK
         run: gradle assembleRelease --no-daemon --stacktrace
 
+      # 版本号直接读 build.gradle.kts 的 versionName，不再硬编码，杜绝改名忘改工作流
       - name: Sign APK
         run: |
+          VER=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | sed 's/.*"\(.*\)"/\1/')
+          echo "Building version: $VER"
           BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
           echo "Using build-tools: $BT"
           keytool -genkeypair -v -keystore release.keystore -alias mediaforge \
@@ -44,18 +48,21 @@ jobs:
             -dname "CN=MediaForge, OU=Logan, O=Logan, C=CN"
           ${BT}/zipalign -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
           ${BT}/apksigner sign --ks release.keystore --ks-pass pass:mediaforge2024 \
-            --key-pass pass:mediaforge2024 --out MediaForge-v1.4.1.apk app-release-aligned.apk
-          ${BT}/apksigner verify MediaForge-v1.4.1.apk
+            --key-pass pass:mediaforge2024 --out MediaForge-v${VER}.apk app-release-aligned.apk
+          ${BT}/apksigner verify MediaForge-v${VER}.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaForge-APK
-          path: MediaForge-v1.4.1.apk
+          path: MediaForge-v*.apk
 
+      # 只有 tag 推送才发布 Release；普通 main 提交只出构建产物，不会覆盖任何已发布版本
       - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1.4.1 || gh release create v1.4.1 --title "MediaForge v1.4.1" --notes "v1.4.1 更新（用户反馈）：① 修复视频进度条拖动回跳——拖动时不再被播放进度打断，松手后从所选位置继续播放（转换页上传预览与音频播放同样生效）；② 自由裁剪全新交互：点击「自由裁剪」立即弹出全屏编辑器，单指拖动平移图片、双指捏合缩放，框内显示的就是最终裁剪画面（所见即所得），也可选 1:1/4:3/3:4/16:9/9:16 固定比例或拖四角自由调框，输出真实裁剪；③ 图片比例卡片新增迷你实时预览：选比例或手动输入宽高时不用上滑就能看到输出画面；④ 切到其他 APP 再回来直接恢复刚才的页面（记住页签，不再回到首页重新加载）；⑤ 新增色域显示：视频按 color_primaries 识别 Rec.709/sRGB、Rec.2020 广色域、DCI-P3 等，图片按内嵌 ICC 判断 sRGB/Adobe RGB/Display P3，识别页与转换页都显示；⑥ 参数防伪加强：新增双引擎交叉校验（FFprobe 与系统解码器独立解析），分辨率/时长不一致时明确提示元数据可能被篡改，并列出两边的真实值；⑦ 保留 v1.4.0 全部能力：识别增强（宽高比/帧率/视频音频流码率分开/位深/色彩空间）、视频画面比例与色彩空间真实转换、竖屏视频预览控件不遮挡。作者：罗根"
-          gh release upload v1.4.1 MediaForge-v1.4.1.apk --clobber
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" || gh release create "$TAG" --title "MediaForge $TAG" --notes-file RELEASE_NOTES.md
+          gh release upload "$TAG" MediaForge-v*.apk --clobber
