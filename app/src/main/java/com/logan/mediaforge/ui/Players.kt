@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.logan.mediaforge.core.fmtMs
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 
 /** 音频播放条：支持本地文件路径或 content Uri，真实播放；autoPlay=true 时准备好后自动开始 */
 @Composable
@@ -50,7 +51,9 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免回跳
     var dragging by remember(mediaPath, mediaUri) { mutableStateOf(false) }
-    var suppressUntil by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
+    // seek 异步生效期间的“挂起目标位”：播放器没追上目标前进度条保持目标位，彻底消除前后抖动
+    var pendingSeek by remember(mediaPath, mediaUri) { mutableIntStateOf(-1) }
+    var seekAt by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
     val player = remember(mediaPath, mediaUri) {
         MediaPlayer().apply {
             // 关键修复：播放自然结束后，按钮要从「暂停(两条杠)」复位为「播放(三角)」，
@@ -88,10 +91,22 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     }
     LaunchedEffect(playing) {
         while (playing) {
-            if (!dragging && System.currentTimeMillis() >= suppressUntil) {
-                try { pos = player.currentPosition } catch (_: Exception) { }
+            if (!dragging) {
+                val ps = pendingSeek
+                if (ps >= 0) {
+                    val cur = try { player.currentPosition } catch (_: Exception) { ps }
+                    // 播放器已报告到目标附近（或超时兜底）才恢复跟随，期间显示保持目标位不回跳
+                    if (abs(cur - ps) <= 700 || System.currentTimeMillis() - seekAt > 2500) {
+                        pendingSeek = -1
+                        pos = cur
+                    } else {
+                        pos = ps
+                    }
+                } else {
+                    try { pos = player.currentPosition } catch (_: Exception) { }
+                }
             }
-            delay(300)
+            delay(200)
         }
     }
 
@@ -132,7 +147,8 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                 },
                 onValueChangeFinished = {
                     try { player.seekTo(pos) } catch (_: Exception) { }
-                    suppressUntil = System.currentTimeMillis() + 600
+                    pendingSeek = pos
+                    seekAt = System.currentTimeMillis()
                     dragging = false
                 },
                 valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
@@ -162,7 +178,9 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     var failed by remember(uri) { mutableStateOf(false) }
     // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免拖动后回跳
     var dragging by remember(uri) { mutableStateOf(false) }
-    var suppressUntil by remember(uri) { mutableLongStateOf(0L) }
+    // seek 异步生效期间的“挂起目标位”：播放器没追上目标前进度条保持目标位，彻底消除前后抖动
+    var pendingSeek by remember(uri) { mutableIntStateOf(-1) }
+    var seekAt by remember(uri) { mutableLongStateOf(0L) }
     val vv = remember(uri) {
         VideoView(context).apply {
             setVideoURI(uri)
@@ -239,7 +257,8 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
                     },
                     onValueChangeFinished = {
                         try { vv?.seekTo(pos) } catch (_: Exception) { }
-                        suppressUntil = System.currentTimeMillis() + 600
+                        pendingSeek = pos
+                        seekAt = System.currentTimeMillis()
                         dragging = false
                     },
                     valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
@@ -257,10 +276,21 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     // 播放中轮询更新进度
     LaunchedEffect(playing, prepared) {
         while (playing && prepared) {
-            if (!dragging && System.currentTimeMillis() >= suppressUntil) {
-                try { pos = vv.currentPosition } catch (_: Exception) { }
+            if (!dragging) {
+                val ps = pendingSeek
+                if (ps >= 0) {
+                    val cur = try { vv.currentPosition } catch (_: Exception) { ps }
+                    if (abs(cur - ps) <= 700 || System.currentTimeMillis() - seekAt > 2500) {
+                        pendingSeek = -1
+                        pos = cur
+                    } else {
+                        pos = ps
+                    }
+                } else {
+                    try { pos = vv.currentPosition } catch (_: Exception) { }
+                }
             }
-            delay(300)
+            delay(200)
         }
     }
     DisposableEffect(uri) {

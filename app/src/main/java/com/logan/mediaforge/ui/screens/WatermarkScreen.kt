@@ -9,6 +9,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -68,6 +71,8 @@ object WatermarkState {
     var origH by mutableStateOf(0)
     var brushMode by mutableStateOf(false)      // false=框选 true=涂抹
     var brushPct by mutableStateOf(3f)          // 笔刷直径占图宽百分比（1..10）
+    // 导出格式：follow=跟随原图；jpg/png/webp=强制指定（真实重新编码，非改后缀）
+    var outFmt by mutableStateOf("follow")
     var box by mutableStateOf<InpaintEngine.BoxRect?>(null)   // 只保留一个框，可移动/缩放
     val strokes = mutableStateListOf<InpaintEngine.Stroke>()
 
@@ -160,7 +165,7 @@ fun WatermarkScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Slider(value = st.brushPct, onValueChange = { st.brushPct = it }, valueRange = 1f..10f)
             } else {
-                Text("框选：拖动画一个框 · 拖框内部移动位置 · 拖四角圆点缩放大小（只保留一个框，重新拖动画新框即替换）",
+                Text("框选：拖框内部移动位置 · 拖四角圆点缩放大小。已有框时点其它位置不会误建新框；要重画请先点「清除框选」再拖动",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -174,7 +179,7 @@ fun WatermarkScreen() {
                         Toast.makeText(context, "请先框选或涂抹要去除的水印区域", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
-                    TaskRepository.startInpaint(u, st.name, st.box?.let { listOf(it) } ?: emptyList(), st.strokes.toList())
+                    TaskRepository.startInpaint(u, st.name, st.box?.let { listOf(it) } ?: emptyList(), st.strokes.toList(), st.outFmt)
                     Toast.makeText(context, "去水印任务已创建，请到「任务」页查看进度，完成后可下载", Toast.LENGTH_LONG).show()
                 },
                 enabled = hasMask,
@@ -185,6 +190,36 @@ fun WatermarkScreen() {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary)
             }
+
+            // 导出格式下拉：默认跟随原图，只去水印不改格式；手动指定则真实重新编码
+            val fmtOptions = listOf(
+                "follow" to "跟随原图格式",
+                "png" to "PNG",
+                "jpg" to "JPG",
+                "webp" to "WebP"
+            )
+            var fmtExpanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(onClick = { fmtExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("导出格式：${fmtOptions.first { it.first == st.outFmt }.second}")
+                }
+                DropdownMenu(expanded = fmtExpanded, onDismissRequest = { fmtExpanded = false }) {
+                    fmtOptions.forEach { (v, label) ->
+                        DropdownMenuItem(
+                            text = { Text(if (v == st.outFmt) "✓ $label" else label) },
+                            onClick = { st.outFmt = v; fmtExpanded = false }
+                        )
+                    }
+                }
+            }
+            Text(
+                if (st.outFmt == "follow")
+                    "原图是 JPG/PNG/WebP 时按原格式导出（分辨率不变，只去水印）；HEIC/GIF/BMP/TIFF 等系统无法原样回写的格式会自动导出 PNG，并在任务里提示。"
+                else
+                    "以所选格式真实重新编码导出（非改后缀，导出后会校验真实格式），分辨率与原图一致。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = {
@@ -263,7 +298,9 @@ private fun MaskEditor(
         var moveBase by remember(bmp) { mutableStateOf<InpaintEngine.BoxRect?>(null) }
         val ptsBuf = remember(bmp) { mutableListOf<Pair<Float, Float>>() }
         var paintTick by remember(bmp) { mutableStateOf(0) }   // 涂抹时触发重绘
-        val brushHalf = st.brushPct / 100f / 2f
+        // 注意：这里不再缓存 brushHalf 局部变量！pointerInput(bmp) 闭包只在换图时重建，
+        // 缓存会导致调滑块后闭包里还是旧值（画着是粗的、松手保存却是上一次的细的）。
+        // 改为在回调里直接读 WatermarkState.brushPct，永远取当前值。
 
         Image(
             bitmap = bmp.asImageBitmap(),
@@ -284,7 +321,13 @@ private fun MaskEditor(
                                 ptsBuf.add(toNorm(pos))
                             } else {
                                 val b = WatermarkState.box
-                                if (b != null) {
+                                if (b == null) {
+                                    // 没有框：拖动任意位置画新框
+                                    dragMode = DragMode.NEW_BOX
+                                    val n = toNorm(pos)
+                                    WatermarkState.box = InpaintEngine.BoxRect(n.first, n.second, n.first, n.second)
+                                    anchor = Offset(n.first, n.second)
+                                } else {
                                     val idx = (0..3).firstOrNull { i ->
                                         val c = cornerPx(b, i)
                                         abs(pos.x - c.x) <= handleR * 1.6f && abs(pos.y - c.y) <= handleR * 1.6f
@@ -296,30 +339,18 @@ private fun MaskEditor(
                                         3 -> DragMode.RESIZE_BR
                                         else -> null
                                     }
-                                    if (dragMode == null && pos.x >= offX && pos.x <= offX + drawW &&
-                                        pos.y >= offY && pos.y <= offY + drawH
-                                    ) {
-                                        // 在框内部 → 移动；在框外部 → 画新框（替换）
+                                    if (dragMode == null) {
                                         val inside = pos.x >= offX + b.l * drawW && pos.x <= offX + b.r * drawW &&
                                             pos.y >= offY + b.t * drawH && pos.y <= offY + b.b * drawH
                                         if (inside) {
+                                            // 框内部 → 拖动移动整个框
                                             dragMode = DragMode.MOVE_BOX
                                             moveBase = b
                                             anchor = pos
-                                        } else {
-                                            dragMode = DragMode.NEW_BOX
-                                            val n = toNorm(pos)
-                                            WatermarkState.box = InpaintEngine.BoxRect(n.first, n.second, n.first, n.second)
-                                            anchor = Offset(n.first, n.second)
                                         }
-                                    } else if (dragMode == null) {
-                                        dragMode = null
+                                        // 框外部 → 不动作：点击/拖动其它位置不再把框“跳”过去；
+                                        // 要重画请先点「清除框选」再拖动
                                     }
-                                } else {
-                                    dragMode = DragMode.NEW_BOX
-                                    val n = toNorm(pos)
-                                    WatermarkState.box = InpaintEngine.BoxRect(n.first, n.second, n.first, n.second)
-                                    anchor = Offset(n.first, n.second)
                                 }
                             }
                         },
@@ -366,7 +397,8 @@ private fun MaskEditor(
                         onDragEnd = {
                             if (dragMode == DragMode.PAINT) {
                                 val pts = ptsBuf.toList()
-                                if (pts.size >= 2) onStrokeDone(InpaintEngine.Stroke(pts, brushHalf))
+                                if (pts.size >= 2)
+                                    onStrokeDone(InpaintEngine.Stroke(pts, WatermarkState.brushPct / 100f / 2f))
                                 ptsBuf.clear()
                             } else if (dragMode != null) {
                                 // 规整化：保证 l<r、t<b，且太小则丢弃
@@ -395,7 +427,10 @@ private fun MaskEditor(
                 val tick = paintTick   // 读取以触发涂抹中实时重绘
                 for (s in stW.strokes) drawStrokePath(s, offX, offY, drawW, drawH, Color(0x8CFFFFFF))
                 if (dragMode == DragMode.PAINT && ptsBuf.isNotEmpty()) {
-                    drawStrokePath(InpaintEngine.Stroke(ptsBuf.toList(), brushHalf), offX, offY, drawW, drawH, Color(0xB3FFFFFF))
+                    drawStrokePath(
+                        InpaintEngine.Stroke(ptsBuf.toList(), WatermarkState.brushPct / 100f / 2f),
+                        offX, offY, drawW, drawH, Color(0xB3FFFFFF)
+                    )
                 }
 
                 // 框选：亮黄色描边 + 浅色填充 + 四角白色圆点手柄

@@ -314,7 +314,7 @@ private fun EditorContent(
                         }
                     },
                     Modifier.weight(1f)
-                ) { Text("确定裁剪") }
+                ) { Text("开始裁剪（创建任务）") }
             }
         }
     }

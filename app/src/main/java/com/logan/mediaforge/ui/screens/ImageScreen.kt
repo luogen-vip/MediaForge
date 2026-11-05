@@ -161,6 +161,27 @@ fun ImageScreen() {
         targetW.toFloat() / targetH.toFloat()
     } else if (st.isCropped) cropAspect else st.lastAspect
 
+    // 提交转换任务（校验 + 创建）；开始转换按钮与自由裁剪确认共用，
+    // 参数在点击时实时读取，避免闭包捕获旧值
+    fun startConversion() {
+        val u = st.uri ?: return
+        val rawW = st.wText.toIntOrNull() ?: 0
+        val rawH = st.hText.toIntOrNull() ?: 0
+        if (rawW > 32767 || rawH > 32767) {
+            Toast.makeText(context, "分辨率超出限制：单边最大 32767 像素", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (rawW > 0 && rawH > 0 && rawW.toLong() * rawH > 80_000_000L) {
+            Toast.makeText(context, "分辨率过大（总像素超过 8000 万），请调小一些", Toast.LENGTH_LONG).show()
+            return
+        }
+        TaskRepository.startImage(
+            u, st.name, st.extSel, rawW.coerceIn(0, 32767), rawH.coerceIn(0, 32767), st.quality.toInt(),
+            ImageEngine.CropRect(st.cropL, st.cropT, st.cropR, st.cropB)
+        )
+        Toast.makeText(context, "已加入任务，可在「任务」页查看与下载", Toast.LENGTH_SHORT).show()
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -307,7 +328,25 @@ fun ImageScreen() {
                 }) { Text("重置为原比例（取消裁剪）") }
             }
 
-            SectionCard("目标分辨率", "留空或 0 表示保持裁剪区域原始像素；修改后预览实时变化") {
+            SectionCard("目标分辨率", "留空或 0 表示保持裁剪区域原始像素；下方迷你预览随输入实时变化，不用再上滑看效果") {
+                // 迷你实时预览（输入宽高时不用上滑也能看到输出效果）
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(100.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val a = aspect.coerceIn(0.05f, 20f)
+                    var w = maxWidth
+                    var h = w / a
+                    if (h > maxHeight) { h = maxHeight; w = h * a }
+                    val bmpPrev = st.preview
+                    if (bmpPrev != null) {
+                        CropPreviewImage(
+                            bmp = bmpPrev,
+                            cropL = st.cropL, cropT = st.cropT, cropR = st.cropR, cropB = st.cropB,
+                            modifier = Modifier.size(w, h).clip(RoundedCornerShape(8.dp))
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = st.wText,
@@ -371,22 +410,7 @@ fun ImageScreen() {
             }
 
             Button(
-                onClick = {
-                    val u = st.uri ?: return@Button
-                    if ((st.wText.toIntOrNull() ?: 0) > 32767 || (st.hText.toIntOrNull() ?: 0) > 32767) {
-                        Toast.makeText(context, "分辨率超出限制：单边最大 32767 像素", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
-                    if (targetW > 0 && targetH > 0 && targetW.toLong() * targetH > 80_000_000L) {
-                        Toast.makeText(context, "分辨率过大（总像素超过 8000 万），请调小一些", Toast.LENGTH_LONG).show()
-                        return@Button
-                    }
-                    TaskRepository.startImage(
-                        u, st.name, st.extSel, targetW, targetH, st.quality.toInt(),
-                        ImageEngine.CropRect(st.cropL, st.cropT, st.cropR, st.cropB)
-                    )
-                    Toast.makeText(context, "已加入任务，可在「任务」页查看与下载", Toast.LENGTH_SHORT).show()
-                },
+                onClick = { startConversion() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("开始转换（加入任务）") }
 
@@ -406,6 +430,9 @@ fun ImageScreen() {
                         }
                         st.keepRatio = true
                         showFreeCrop = false
+                        // 直接创建裁剪任务：在全屏编辑器里点「开始裁剪」就出任务，
+                        // 不再返回页面自动预选后还要再点一次「开始转换」
+                        startConversion()
                     }
                 )
             }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegSession
@@ -393,17 +394,19 @@ object TaskRepository {
 
     fun startInpaint(
         uri: Uri, displayName: String,
-        rects: List<InpaintEngine.BoxRect>, strokes: List<InpaintEngine.Stroke>
+        rects: List<InpaintEngine.BoxRect>, strokes: List<InpaintEngine.Stroke>,
+        outFmt: String = "follow"                       // follow=跟随原图 / png / jpg / webp
     ) {
         val id = counter.getAndIncrement()
         val hasModel = InpaintEngine.modelAvailable(appContext)
         val engineName = if (hasModel) "LaMa AI 模型" else "内置智能填充"
+        val fmtLabel = if (outFmt == "follow") "跟随原图" else outFmt.uppercase()
         add(
             ConvertTask(
                 id = id, kind = TaskKind.IMAGE, typeName = "图片去水印",
                 sourceName = displayName, sourceReal = "",
-                fromExt = displayName.substringAfterLast('.', "?"), toExt = "png",
-                detail = "框选×${rects.size} · 涂抹×${strokes.size} · 引擎：$engineName",
+                fromExt = displayName.substringAfterLast('.', "?"), toExt = fmtLabel,
+                detail = "框选×${rects.size} · 涂抹×${strokes.size} · 引擎：$engineName · 导出：$fmtLabel",
                 status = TaskStatus.IMPORTING, phase = "导入源图片", progress = 0f
             )
         )
@@ -426,6 +429,16 @@ object TaskRepository {
                 update(id) {
                     it.copy(sourceReal = det?.realName ?: "未知", phase = "修复中")
                 }
+                // 决定导出格式：跟随原图时 JPG/PNG/WebP 原格式回写（分辨率不变，只去水印）；
+                // HEIC/GIF/BMP/TIFF 等系统无法原样回写 → 自动回退 PNG 并在任务里提示
+                val realExt = det?.realExt ?: ""
+                val canFollow = realExt == "jpg" || realExt == "png" || realExt == "webp"
+                val target = if (outFmt == "follow") (if (canFollow) realExt else "png") else outFmt
+                val fallbackNote = if (outFmt == "follow" && !canFollow)
+                    "原格式 ${det?.realName ?: "未知"} 无法原样回写，已导出 PNG" else ""
+                update(id) {
+                    it.copy(toExt = target, detail = it.detail + " → ${target.uppercase()}")
+                }
                 result = InpaintEngine.inpaint(appContext, bmp, rects, strokes) { p, ph ->
                     update(id) {
                         if (it.status == TaskStatus.RUNNING) it.copy(progress = p.coerceIn(0.05f, 0.95f), phase = ph) else it
@@ -438,22 +451,34 @@ object TaskRepository {
                     return@launch
                 }
                 update(id) { it.copy(phase = "保存结果", progress = 0.97f) }
-                val out = uniqueOut("png")
-                val ok = out.outputStream().use { fos -> result!!.compress(Bitmap.CompressFormat.PNG, 100, fos) }
+                val out = uniqueOut(target)
+                val ok = out.outputStream().use { fos ->
+                    when (target) {
+                        "jpg" -> result!!.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                        "webp" -> result!!.compress(
+                            if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+                            else Bitmap.CompressFormat.WEBP, 95, fos
+                        )
+                        else -> result!!.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                    }
+                }
                 if (!ok || !out.exists() || out.length() == 0L) {
                     fail(id, "保存结果失败")
                     return@launch
                 }
+                // 真实格式校验：导出什么格式就是什么格式，不是改后缀
                 val det2 = FileSniffer.detect(out)
-                if (det2 == null || det2.realExt != "png") {
-                    fail(id, "输出校验失败：实际格式为 ${det2?.realName ?: "未知"}")
+                if (det2 == null || det2.realExt != target) {
+                    fail(id, "输出校验失败：实际格式为 ${det2?.realName ?: "未知"}，与目标 ${target.uppercase()} 不符")
                     return@launch
                 }
                 update(id) {
                     it.copy(
                         status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
                         output = out,
-                        outputInfo = "${result!!.width}×${result!!.height} · " + fmtBytes(out.length())
+                        outputInfo = "${result!!.width}×${result!!.height} · ${target.uppercase()}" +
+                            (if (fallbackNote.isNotEmpty()) " · $fallbackNote" else "") +
+                            " · " + fmtBytes(out.length())
                     )
                 }
             } catch (e: OutOfMemoryError) {
