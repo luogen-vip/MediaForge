@@ -133,7 +133,10 @@ fun WatermarkScreen() {
             st.detRealName = d ?: "未知"
             st.realExt = ext
             st.hasAlpha = alpha
-            st.transparentMode = false
+            // 透明图片自动开启透明模式：涂抹水印处直接完全透明，不再用画面填补
+            //（黑块/白底的根因就是透明图走了普通填充路径），用户仍可手动关闭
+            st.transparentMode = alpha
+            if (alpha && st.outFmt == "jpg") st.outFmt = "png"
             st.preview = bmp
             st.origW = wh?.first ?: 0
             st.origH = wh?.second ?: 0
@@ -232,7 +235,7 @@ fun WatermarkScreen() {
                     Column(Modifier.weight(1f)) {
                         Text("水印区域恢复透明（透明图片专用）", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            if (st.hasAlpha) "已检测到透明通道：开启后水印区域直接变完全透明，不再用画面填补"
+                            if (st.hasAlpha) "已检测到透明通道（已自动开启）：涂抹水印处直接变完全透明，不再出现黑块/白底；关闭则用画面填补"
                             else "透明 LOGO / 免抠图去水印：开启后涂抹处直接变完全透明（不补画面）",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

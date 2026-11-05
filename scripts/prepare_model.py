@@ -2,13 +2,13 @@
 """
 MediaForge 构建期模型准备脚本（在 GitHub Actions 上运行）：
 
-1. 下载 LaMa 图像修复模型（big-lama 的 ONNX 导出，Apache-2.0 开源）
-   -> app/src/main/assets/inpaint_model.onnx（去水印用）
-2. 下载 U2Net 显著性抠图模型（Apache-2.0 开源）
-   -> app/src/main/assets/matting_model.onnx（抠图用）
-3. 两个模型都做动态 int8 量化（更快、更小），并用真实推理验证可用性
-4. 验证通过 -> 打包量化版；失败 -> 打包 fp32 原版（过大则降级备选模型）；
-   下载也失败 -> 不打包（APP 自动用内置算法兜底，功能永不失败）
+1. LaMa 去水印模型：联网下载 + 动态 int8 量化 + 真实推理验证
+   -> app/src/main/assets/inpaint_model.onnx（与 v1.4.4 行为完全一致，不改动）
+2. 抠图模型：已直接提交在 app/src/main/assets/（开箱即用，本脚本绝不覆盖）：
+   - matting_model.onnx       U2Net 全量模型（Conv 权重 int8 QDQ，全平台兼容）
+   - matting_model_lite.onnx  U2NetP 轻量模型（官方 fp32 原版，零量化，兜底）
+   仅做移动端算子安全校验（不含 ConvInteger / MatMulInteger / QLinear* 等
+   onnxruntime-android 不支持的算子）；若资产缺失才走联网下载兜底。
 """
 import os
 import shutil
@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "..", "app", "src", "main", "assets")
 LAMA_OUT = os.path.join(ASSETS, "inpaint_model.onnx")
 MATTING_OUT = os.path.join(ASSETS, "matting_model.onnx")
+MATTING_LITE_OUT = os.path.join(ASSETS, "matting_model_lite.onnx")
 
 # LaMa（去水印）：fp32 约 208MB
 LAMA_URLS = [
@@ -35,6 +36,9 @@ U2NETP_URLS = [
     "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
     "https://huggingface.co/tomjackson2023/rembg/resolve/main/u2netp.onnx",
 ]
+
+# onnxruntime-android 的 CPU EP 没有这些量化算子的 ARM 实现（v1.4.4 抠图失效的根因）
+MOBILE_UNSAFE_OPS = ("ConvInteger", "MatMulInteger", "QLinearConv", "QLinearMatMul", "DynamicQuantizeLinear")
 
 
 def download_stream(urls, out, min_bytes):
@@ -74,6 +78,20 @@ def quantize(fp32, int8, min_mb=5, max_mb=120):
     except Exception as e:
         print(f"quantize failed: {e}", flush=True)
         return False
+
+
+def assert_mobile_safe(path):
+    """必须校验：抠图模型不能含 onnxruntime-android 不支持的量化算子"""
+    import onnx
+
+    model = onnx.load(path, load_external_data=False)
+    ops = {}
+    for n in model.graph.node:
+        ops[n.op_type] = ops.get(n.op_type, 0) + 1
+    bad = [op for op in ops if op in MOBILE_UNSAFE_OPS]
+    if bad:
+        raise RuntimeError(f"{path} 包含移动端不支持的量化算子: {bad}")
+    print(f"op check ok: {os.path.basename(path)} 无移动端不兼容算子")
 
 
 def verify_lama(path: str) -> bool:
@@ -156,7 +174,22 @@ def build_lama() -> int:
 
 
 def build_matting() -> int:
-    """优先 u2net（效果最强，量化后约 44MB）；不行降级 u2netp（轻量，约 1.5MB）"""
+    """抠图模型已提交在 assets：只校验，绝不联网覆盖。
+    仅当资产意外缺失时才联网下载兜底（保证 APP 仍能出厂可用）。"""
+    bundled_main = os.path.exists(MATTING_OUT) and os.path.getsize(MATTING_OUT) > 1_000_000
+    bundled_lite = os.path.exists(MATTING_LITE_OUT) and os.path.getsize(MATTING_LITE_OUT) > 100_000
+    if bundled_main and bundled_lite:
+        print(f"matting models already bundled: "
+              f"{os.path.basename(MATTING_OUT)} ({os.path.getsize(MATTING_OUT) >> 20} MB) + "
+              f"{os.path.basename(MATTING_LITE_OUT)} ({os.path.getsize(MATTING_LITE_OUT) >> 20} MB), skip download")
+        assert_mobile_safe(MATTING_OUT)
+        assert_mobile_safe(MATTING_LITE_OUT)
+        verify_matting(MATTING_OUT)
+        verify_matting(MATTING_LITE_OUT)
+        return 0
+
+    # 兜底：资产缺失时按老流程下载量化（生成的仍是 fp32 原版可用的轻量备选优先）
+    print("WARN: bundled matting assets missing, fallback to download ...")
     candidates = [
         (U2NET_URLS, "/tmp/u2net_fp32.onnx", "/tmp/u2net_int8.onnx", 100_000_000, 15),
         (U2NETP_URLS, "/tmp/u2netp_fp32.onnx", "/tmp/u2netp_int8.onnx", 2_000_000, 1),
@@ -178,9 +211,7 @@ def build_matting() -> int:
             shutil.copyfile(chosen, MATTING_OUT)
             print(f"BUNDLED {chosen} -> {MATTING_OUT} ({os.path.getsize(MATTING_OUT) >> 20} MB)")
             return 0
-    print("MATTING DOWNLOAD/VERIFY ALL FAILED -> no matting model, app will use built-in algorithm")
-    if os.path.exists(MATTING_OUT):
-        os.remove(MATTING_OUT)
+    print("MATTING DOWNLOAD/VERIFY ALL FAILED -> keep bundled assets as-is")
     return 0
 
 

@@ -304,7 +304,7 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
  * 播放结束自动复位为播放按钮（与音频播放器一致）。
  */
 @Composable
-fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
+fun VideoPreview(uri: Uri, modifier: Modifier = Modifier, fillViewport: Boolean = false) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var aspect by remember(uri) { mutableFloatStateOf(16f / 9f) } // 视频宽/高，onPrepared 后更新
@@ -391,9 +391,11 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     }
 
     Column(modifier) {
-        // ---- 画面：固定高度容器内等比缩放，任何比例都不变形、不撑爆布局 ----
+        // ---- 画面：固定高度容器内等比缩放，任何比例都不变形、不撑爆布局；
+        //      全屏模式下占满剩余空间 ----
         BoxWithConstraints(
-            Modifier.fillMaxWidth().height(220.dp),
+            if (fillViewport) Modifier.fillMaxWidth().weight(1f)
+            else Modifier.fillMaxWidth().height(220.dp),
             contentAlignment = Alignment.Center
         ) {
             val a = aspect.coerceIn(0.2f, 5f)

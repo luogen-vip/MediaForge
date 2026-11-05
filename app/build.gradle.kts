@@ -12,8 +12,8 @@ android {
         applicationId = "com.logan.mediaforge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.4.4"
+        versionCode = 17
+        versionName = "1.4.5"
     }
 
     buildTypes {

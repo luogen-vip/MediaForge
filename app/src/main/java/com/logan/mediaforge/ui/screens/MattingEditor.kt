@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,7 +107,8 @@ private fun EditorBody(
         }
         Text(
             (if (modelAvailable)
-                "AI 自动识别主体（人物/动物/花草/物品通用），背景变完全透明，输出透明 PNG。" +
+                "内置 U2Net AI 模型（双模型保险：全量版+轻量兼容版，自动选择设备可用的那个），" +
+                "自动识别主体，背景与水印变完全透明，输出透明 PNG。" +
                 "抠得不准的地方用下面的笔刷卡回来或抹掉。"
             else
                 "内置 AI 模型不可用，将使用「背景色智能识别」引擎：适合纯色/渐变背景，" +
@@ -196,6 +198,11 @@ private fun StrokeEditor(
     brushPct: Float
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(380.dp)) {
+        // 关键修复：pointerInput 闭包只在首次创建时捕获参数值，直接读参数会永远是旧值
+        // （表现为涂抹时粗细自动变回上一次设置）。用 rememberUpdatedState 保证
+        // 手势进行中每一刻都读到最新的笔刷粗细与擦除/保留模式。
+        val curBrushPct by rememberUpdatedState(brushPct)
+        val curEraseMode by rememberUpdatedState(eraseMode)
         val density = LocalDensity.current
         val cw = with(density) { maxWidth.toPx() }
         val ch = with(density) { maxHeight.toPx() }
@@ -259,10 +266,17 @@ private fun StrokeEditor(
                                 val dy = ch.position.y - start.y
                                 if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > slop) {
                                     started = true
-                                    activeErase = eraseMode
+                                    activeErase = curEraseMode
                                     ptsBuf.clear()
                                     ptsBuf.add(toNorm(ch.position))
                                 } else if (ch.changedToUp()) {
+                                    // 原地点按（没拖动）：也算一笔涂抹，轻点水印即生效
+                                    activeErase = curEraseMode
+                                    val stroke = InpaintEngine.Stroke(
+                                        listOf(toNorm(start)), curBrushPct / 100f / 2f
+                                    )
+                                    if (activeErase) eraseStrokes.add(stroke) else keepStrokes.add(stroke)
+                                    paintTick++
                                     break
                                 }
                             }
@@ -276,8 +290,9 @@ private fun StrokeEditor(
                             if (ch.changedToUp()) {
                                 if (started) {
                                     val pts = ptsBuf.toList()
-                                    if (pts.size >= 2) {
-                                        val stroke = InpaintEngine.Stroke(pts, brushPct / 100f / 2f)
+                                    // 单点/短划也有效（>=1 个点即成一笔），粗细取当前滑块值
+                                    if (pts.isNotEmpty()) {
+                                        val stroke = InpaintEngine.Stroke(pts, curBrushPct / 100f / 2f)
                                         if (activeErase) eraseStrokes.add(stroke) else keepStrokes.add(stroke)
                                     }
                                     ptsBuf.clear()
