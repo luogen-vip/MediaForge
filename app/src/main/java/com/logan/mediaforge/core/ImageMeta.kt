@@ -72,7 +72,7 @@ object ImageMeta {
         var icc: String? = null
         var off = 8
         while (off + 8 <= n) {
-            val len = u32be(b, off)
+            val len = u32be(b, off).toInt()
             val type = str(b, off + 4, 4)
             val dataStart = off + 8
             if (dataStart + len > n) break // 头部 512KB 内截断即止
