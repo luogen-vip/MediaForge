@@ -48,7 +48,10 @@ import com.logan.mediaforge.core.VideoParams
 import com.logan.mediaforge.core.FileSniffer
 import com.logan.mediaforge.core.MediaProbe
 import com.logan.mediaforge.core.TaskRepository
+import com.logan.mediaforge.core.aspectRatioText
 import com.logan.mediaforge.core.channelLayoutCn
+import com.logan.mediaforge.core.colorMatrixCn
+import com.logan.mediaforge.core.colorRangeCn
 import com.logan.mediaforge.core.fmtBytes
 import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.AudioPlayer
@@ -166,7 +169,14 @@ fun ConvertScreen() {
                 else -> 0 to 0
             }
             TaskRepository.startVideo(uri, null, st.pickedName,
-                VideoParams(st.vExt, st.vCodec, st.crf, st.speed, sw, sh, st.fpsSel, st.vAbr))
+                VideoParams(
+                    ext = st.vExt, vcodec = st.vCodec, crf = st.crf, speed = st.speed,
+                    scaleW = sw, scaleH = sh, fps = st.fpsSel, audioBitrate = st.vAbr,
+                    ratio = st.vRatio, ratioFit = st.vRatioFit,
+                    srcW = st.mediaInfo?.width ?: 0, srcH = st.mediaInfo?.height ?: 0,
+                    colorMatrix = st.vColorMatrix, colorRange = st.vColorRange
+                )
+            )
         } else {
             if (st.trimOn) {
                 if (sSec == null || eSec == null || eSec <= sSec) {
@@ -207,7 +217,7 @@ fun ConvertScreen() {
             // -------- 源文件预览与信息 --------
             SectionCard("源文件：${st.pickedName}") {
                 if (st.isVideoSource) {
-                    VideoPreview(st.pickedUri!!, Modifier.fillMaxWidth().height(220.dp))
+                    VideoPreview(st.pickedUri!!, Modifier.fillMaxWidth())
                 } else {
                     AudioPlayer(mediaUri = st.pickedUri)
                 }
@@ -226,10 +236,28 @@ fun ConvertScreen() {
                 if (info != null) {
                     InfoRow("时长", fmtMs(info.durationMs))
                     if (info.videoCodec != null) {
-                        InfoRow("视频编码", "${info.videoCodec} (${info.width}×${info.height})")
+                        val wh = "${info.width}×${info.height}"
+                        val ratio = if (info.width != null && info.height != null)
+                            aspectRatioText(info.width!!, info.height!!) else ""
+                        InfoRow("视频编码", "${info.videoCodec} ($wh${if (ratio != "") " · $ratio" else ""})")
+                        if (info.fps != null)
+                            InfoRow("帧率", String.format(java.util.Locale.US, "%.2f fps", info.fps))
+                        if (info.bitrateKbps != null) InfoRow("总码率", "${info.bitrateKbps} kbps")
+                        // 视频码率与音频码率分开显示（各自是各自的参数）
+                        if (info.videoBitrateKbps != null)
+                            InfoRow("视频流码率", "${info.videoBitrateKbps} kbps")
+                        if (info.videoBitDepth != null)
+                            InfoRow("视频位深", "${info.videoBitDepth}bit${if (info.pixFmt != null) "（${info.pixFmt}）" else ""}")
+                        if (info.colorSpace != null || info.colorPrimaries != null)
+                            InfoRow("色彩空间", colorMatrixCn(info.colorSpace ?: info.colorPrimaries))
+                        if (info.colorRange != null) InfoRow("色彩范围", colorRangeCn(info.colorRange))
                     }
                     if (info.audioCodec != null) {
                         InfoRow("音频编码", info.audioCodec!!)
+                        // 有声视频：音频流自己的码率/位深/采样率（与视频流分开）
+                        if (info.audioBitrateKbps != null)
+                            InfoRow("音频流码率", "${info.audioBitrateKbps} kbps")
+                        if (info.audioBitDepth != null) InfoRow("音频位深", "${info.audioBitDepth}bit")
                         InfoRow("采样率", if (info.sampleRate != null) "${info.sampleRate} Hz" else "未知")
                         InfoRow("声道", channelLayoutCn(info.channelLayout))
                     }
@@ -289,6 +317,58 @@ fun ConvertScreen() {
                             st.fpsSel, { st.fpsSel = it; touch() }, Modifier.weight(1f))
                         DropdownField("音轨码率", listOf(128, 192, 256, 320), { "${it}kbps" },
                             st.vAbr, { st.vAbr = it; touch() }, Modifier.weight(1f))
+                    }
+                    // ---- 画面比例（真实生效：输出文件宽高比严格等于所选比例） ----
+                    DropdownField(
+                        "画面比例（选了比例输出就是这个比例）",
+                        listOf(0f, 16f / 9f, 9f / 16f, 1f, 4f / 3f, 3f / 4f, 3f / 2f, 2f / 3f, 21f / 9f),
+                        {
+                            when (it) {
+                                0f -> "原比例（不变）"
+                                16f / 9f -> "16:9（横屏）"
+                                9f / 16f -> "9:16（竖屏/短视频）"
+                                1f -> "1:1（正方形）"
+                                4f / 3f -> "4:3"
+                                3f / 4f -> "3:4（竖屏）"
+                                3f / 2f -> "3:2"
+                                2f / 3f -> "2:3（竖屏）"
+                                else -> "21:9（宽银幕）"
+                            }
+                        },
+                        st.vRatio, { st.vRatio = it; touch() }
+                    )
+                    if (st.vRatio > 0.01f) {
+                        DropdownField(
+                            "比例适配方式",
+                            listOf("crop", "pad"),
+                            { if (it == "crop") "裁剪填满（不变形，裁掉多余画面）" else "黑边适配（不变形，补黑边）" },
+                            st.vRatioFit, { st.vRatioFit = it; touch() }
+                        )
+                        val tierH = when (st.scaleSel) {
+                            "1080p (1920×1080)" -> 1080
+                            "720p (1280×720)" -> 720
+                            "480p (854×480)" -> 480
+                            "360p (640×360)" -> 360
+                            else -> 0
+                        }
+                        val srcH = st.mediaInfo?.height ?: 0
+                        val baseH = if (tierH > 0) tierH else if (srcH > 0) srcH else 1080
+                        var ow = Math.round(baseH * st.vRatio).toInt(); if (ow % 2 == 1) ow += 1
+                        val oh = if (baseH % 2 == 1) baseH + 1 else baseH
+                        Text(
+                            "输出分辨率将约为 ${ow}×$oh（源分辨率 ${if (srcH > 0) "${st.mediaInfo?.width}×$srcH" else "未知"}）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // ---- 色彩空间（真实转换并写入元数据，ffprobe 可验证） ----
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DropdownField("色彩空间", listOf("", "bt709", "bt601", "bt2020"),
+                            { if (it.isEmpty()) "保持原样" else colorMatrixCn(it) },
+                            st.vColorMatrix, { st.vColorMatrix = it; touch() }, Modifier.weight(1f))
+                        DropdownField("色彩范围", listOf("", "tv", "pc"),
+                            { if (it.isEmpty()) "保持原样" else colorRangeCn(it) },
+                            st.vColorRange, { st.vColorRange = it; touch() }, Modifier.weight(1f))
                     }
                 }
             } else {

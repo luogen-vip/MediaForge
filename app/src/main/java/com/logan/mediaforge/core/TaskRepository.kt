@@ -295,7 +295,9 @@ object TaskRepository {
                 fromExt = srcDesc.substringAfterLast('.', "?"), toExt = params.ext,
                 detail = "目标容器 ${params.ext.uppercase()} · ${params.vcodec} · CRF ${params.crf}" +
                     (if (params.scaleW > 0) " · ${params.scaleW}x${params.scaleH}" else " · 原始分辨率") +
-                    (if (params.fps > 0) " · ${params.fps}fps" else ""),
+                    (if (params.fps > 0) " · ${params.fps}fps" else "") +
+                    (if (params.describeRatio().isNotEmpty()) " · ${params.describeRatio()}" else "") +
+                    (if (params.describeColor().isNotEmpty()) " · ${params.describeColor()}" else ""),
                 status = TaskStatus.IMPORTING, phase = "导入源文件", progress = 0f
             )
         )
@@ -339,21 +341,29 @@ object TaskRepository {
 
     // ==================== 图片任务 ====================
 
-    fun startImage(uri: Uri, displayName: String, targetExt: String, w: Int, h: Int, quality: Int) {
+    fun startImage(
+        uri: Uri, displayName: String, targetExt: String, w: Int, h: Int, quality: Int,
+        crop: ImageEngine.CropRect = ImageEngine.CropRect()
+    ) {
         val id = counter.getAndIncrement()
+        val cropDesc = if (!crop.isFull)
+            " · 已裁剪 ${((crop.r - crop.l) * 100).toInt()}%×${((crop.b - crop.t) * 100).toInt()}%" else ""
         add(
             ConvertTask(
                 id = id, kind = TaskKind.IMAGE, typeName = "图片格式转换",
                 sourceName = displayName, sourceReal = "",
                 fromExt = displayName.substringAfterLast('.', "?"), toExt = targetExt,
-                detail = (if (w > 0 && h > 0) "${w}×${h} · " else "") + "目标 ${targetExt.uppercase()} · 质量 $quality",
+                detail = (if (w > 0 && h > 0) "${w}×${h} · " else "") +
+                    (if (!crop.isFull) "裁剪 ${aspectRatioText(
+                        ((crop.r - crop.l) * 1000).toInt(), ((crop.b - crop.t) * 1000).toInt())} · " else "") +
+                    "目标 ${targetExt.uppercase()} · 质量 $quality",
                 status = TaskStatus.RUNNING, phase = "转换中", progress = 0.3f
             )
         )
         scope.launch {
             try {
                 val out = uniqueOut(targetExt)
-                val ok = ImageEngine.convert(appContext, uri, targetExt, w, h, quality, out)
+                val ok = ImageEngine.convert(appContext, uri, targetExt, w, h, quality, out, crop)
                 if (!ok) {
                     fail(id, "图片转换失败（源文件可能无法解码或已损坏）")
                     return@launch
@@ -366,7 +376,9 @@ object TaskRepository {
                 update(id) {
                     it.copy(
                         status = TaskStatus.COMPLETED, phase = "已完成", progress = 1f,
-                        output = out, outputInfo = (if (w > 0 && h > 0) "${w}×${h} · " else "") + fmtBytes(out.length())
+                        output = out, outputInfo = (if (w > 0 && h > 0) "${w}×${h} · " else "") +
+                            (if (!crop.isFull) "已裁剪" + cropDesc.trimStart('·', ' ') + " · " else "") +
+                            fmtBytes(out.length())
                     )
                 }
             } catch (e: OutOfMemoryError) {

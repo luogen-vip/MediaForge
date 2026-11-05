@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.logan.mediaforge.core.Detection
+import com.logan.mediaforge.core.ImageMeta
 import com.logan.mediaforge.core.MediaInfo
 
 /**
@@ -38,6 +39,11 @@ object ConvertState {
     var scaleSel by mutableStateOf("原画")
     var fpsSel by mutableStateOf(0)
     var vAbr by mutableStateOf(192)
+    // 新增：画面比例与色彩空间（0f = 保持原比例；"" = 保持原样）
+    var vRatio by mutableStateOf(0f)
+    var vRatioFit by mutableStateOf("crop")
+    var vColorMatrix by mutableStateOf("")
+    var vColorRange by mutableStateOf("")
 
     // 预设
     var presetId by mutableStateOf<String?>(null)
@@ -63,6 +69,7 @@ object ConvertState {
         sr = 0; ch = 0; br = 0; depth = "16"; vbr = -1; comp = -1
         vExt = "mp4"; vCodec = "h264"; crf = 23; speed = "medium"
         scaleSel = "原画"; fpsSel = 0; vAbr = 192
+        vRatio = 0f; vRatioFit = "crop"; vColorMatrix = ""; vColorRange = ""
         presetId = null; presetTouched = false
         trimOn = false; trimStart = ""; trimEnd = ""
     }
@@ -82,10 +89,20 @@ object ImageState {
     var quality by mutableStateOf(92f)
     var extSel by mutableStateOf("jpg")
     var lastAspect by mutableStateOf(1f)
+    var imgMeta by mutableStateOf<ImageMeta.Info?>(null)
+    var aspectSel by mutableStateOf("原比例")     // 原比例 / 1:1 / 4:3 / ... / 自由裁剪
+    var cropL by mutableStateOf(0f)
+    var cropT by mutableStateOf(0f)
+    var cropR by mutableStateOf(1f)
+    var cropB by mutableStateOf(1f)
+
+    val isCropped: Boolean
+        get() = cropL > 0.0001f || cropT > 0.0001f || cropR < 0.9999f || cropB < 0.9999f
 
     fun resetSource() {
         uri = null; name = ""; size = 0; det = null; preview = null
         origW = 0; origH = 0; wText = ""; hText = ""
-        lastAspect = 1f
+        lastAspect = 1f; imgMeta = null
+        aspectSel = "原比例"; cropL = 0f; cropT = 0f; cropR = 1f; cropB = 1f
     }
 }

@@ -373,7 +373,7 @@ private fun TaskCard(
             if (videoPlayerVisible && t.status == TaskStatus.COMPLETED &&
                 t.kind == TaskKind.VIDEO && t.output != null
             ) {
-                VideoPreview(Uri.fromFile(t.output), Modifier.fillMaxWidth().height(200.dp))
+                VideoPreview(Uri.fromFile(t.output), Modifier.fillMaxWidth())
             }
         }
     }

@@ -27,9 +27,13 @@ import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.logan.mediaforge.core.FileSniffer
 import com.logan.mediaforge.core.Detection
 import com.logan.mediaforge.core.ImageEngine
+import com.logan.mediaforge.core.ImageMeta
 import com.logan.mediaforge.core.MediaInfo
 import com.logan.mediaforge.core.MediaProbe
+import com.logan.mediaforge.core.aspectRatioText
 import com.logan.mediaforge.core.channelLayoutCn
+import com.logan.mediaforge.core.colorMatrixCn
+import com.logan.mediaforge.core.colorRangeCn
 import com.logan.mediaforge.core.fmtBytes
 import com.logan.mediaforge.core.fmtMs
 import com.logan.mediaforge.ui.InfoRow
@@ -48,6 +52,7 @@ fun DetectScreen() {
     var det by remember { mutableStateOf<Detection?>(null) }
     var mediaInfo by remember { mutableStateOf<MediaInfo?>(null) }
     var imgSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var imgMeta by remember { mutableStateOf<ImageMeta.Info?>(null) }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { u ->
         if (u == null) return@rememberLauncherForActivityResult
@@ -73,12 +78,16 @@ fun DetectScreen() {
             val isz = withContext(Dispatchers.IO) {
                 if (d?.category == "IMAGE") ImageEngine.decodeSize(context, u) else null
             }
+            val im = withContext(Dispatchers.IO) {
+                if (d?.category == "IMAGE") ImageMeta.parse(resolver, u) else null
+            }
             uri = u
             name = n
             size = FileSniffer.querySize(resolver, u)
             det = d
             mediaInfo = mi
             imgSize = isz
+            imgMeta = im
         }
     }
 
@@ -128,24 +137,44 @@ fun DetectScreen() {
             val mi = mediaInfo
             val isz = imgSize
             if (mi != null) {
-                SectionCard("媒体详情", "由 FFprobe 真实解析") {
+                SectionCard("媒体详情", "由 FFprobe 真实解析；视频流与音频流参数分开列出（各自是各自的）") {
                     if (mi.durationMs > 0) InfoRow("时长", fmtMs(mi.durationMs))
-                    if (mi.bitrateKbps != null && mi.bitrateKbps > 0) InfoRow("总比特率", "${mi.bitrateKbps} kbps")
+                    if (mi.bitrateKbps != null && mi.bitrateKbps > 0) InfoRow("总码率", "${mi.bitrateKbps} kbps")
                     if (mi.formatName.isNotEmpty()) InfoRow("容器", mi.formatName)
                     if (mi.videoCodec != null) {
+                        val ratio = if (mi.width != null && mi.height != null)
+                            aspectRatioText(mi.width!!, mi.height!!) else ""
                         InfoRow("视频编码", mi.videoCodec!!)
-                        if (mi.width != null && mi.height != null) InfoRow("视频分辨率", "${mi.width}×${mi.height}")
+                        if (mi.width != null && mi.height != null)
+                            InfoRow("视频分辨率", "${mi.width}×${mi.height}${if (ratio != "") "（比例 $ratio）" else ""}")
+                        if (mi.fps != null)
+                            InfoRow("帧率", String.format(java.util.Locale.US, "%.2f fps", mi.fps))
+                        if (mi.videoBitrateKbps != null) InfoRow("视频流码率", "${mi.videoBitrateKbps} kbps")
+                        if (mi.videoBitDepth != null)
+                            InfoRow("视频位深", "${mi.videoBitDepth}bit${if (mi.pixFmt != null) "（${mi.pixFmt}）" else ""}")
+                        if (mi.colorSpace != null || mi.colorPrimaries != null)
+                            InfoRow("色彩空间", colorMatrixCn(mi.colorSpace ?: mi.colorPrimaries))
+                        if (mi.colorTransfer != null && mi.colorTransfer != "unknown")
+                            InfoRow("传递函数", mi.colorTransfer!!)
+                        if (mi.colorRange != null) InfoRow("色彩范围", colorRangeCn(mi.colorRange))
                     }
                     if (mi.audioCodec != null) {
                         InfoRow("音频编码", mi.audioCodec!!)
-                        InfoRow("采样率", if (mi.sampleRate != null) "${mi.sampleRate} Hz" else "未知")
+                        if (mi.audioBitrateKbps != null) InfoRow("音频流码率", "${mi.audioBitrateKbps} kbps")
+                        if (mi.audioBitDepth != null) InfoRow("音频位深", "${mi.audioBitDepth}bit${if (mi.audioSampleFmt != null) "（${mi.audioSampleFmt}）" else ""}")
+                        if (mi.sampleRate != null) InfoRow("采样率", "${mi.sampleRate} Hz")
                         InfoRow("声道", channelLayoutCn(mi.channelLayout))
                     }
                 }
             } else if (isz != null) {
-                SectionCard("图片详情", "真实解析") {
-                    InfoRow("分辨率", "${isz.first}×${isz.second}")
+                SectionCard("图片详情", "真实解析（位深 / 色彩模式 / 内嵌 ICC 色彩空间）") {
+                    InfoRow("分辨率", "${isz.first}×${isz.second}（比例 ${aspectRatioText(isz.first, isz.second)}）")
                     InfoRow("像素总量", fmtBytes(isz.first.toLong() * isz.second))
+                    val m = imgMeta
+                    if (m != null) {
+                        InfoRow("位深与色彩模式", m.describe())
+                        InfoRow("内嵌色彩空间（ICC）", m.colorSpace ?: "未内嵌（按 sRGB 处理）")
+                    }
                 }
             }
         }

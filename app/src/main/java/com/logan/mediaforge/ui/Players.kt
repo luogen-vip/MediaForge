@@ -2,11 +2,15 @@ package com.logan.mediaforge.ui
 
 import android.media.MediaPlayer
 import android.net.Uri
-import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -19,12 +23,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -126,20 +133,118 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     }
 }
 
-/** 视频预览（VideoView + 系统控制器） */
+/**
+ * 视频预览：播放器 + 自绘控制条（播放/暂停 + 进度 + 时间）。
+ * 旧版用系统 MediaController，竖屏（9:16）视频时上一曲/下一曲按钮被遮住只露一点；
+ * 新版控制条固定在视频下方，与画面比例无关，永远完整可见；
+ * 画面按真实宽高比在固定高度容器内等比缩放，不拉伸不变形。
+ * 播放结束自动复位为播放按钮（与音频播放器一致）。
+ */
 @Composable
 fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            val vv = VideoView(ctx)
-            val mc = MediaController(ctx)
-            mc.setAnchorView(vv)
-            vv.setMediaController(mc)
-            vv.setVideoURI(uri)
-            vv.start()
-            vv
+    var aspect by remember(uri) { mutableFloatStateOf(16f / 9f) } // 视频宽/高，onPrepared 后更新
+    var prepared by remember(uri) { mutableStateOf(false) }
+    var playing by remember(uri) { mutableStateOf(false) }
+    var pos by remember(uri) { mutableIntStateOf(0) }
+    var dur by remember(uri) { mutableIntStateOf(0) }
+    var failed by remember(uri) { mutableStateOf(false) }
+    val vv = remember(uri) {
+        VideoView(context).apply {
+            setVideoURI(uri)
+            setOnPreparedListener { mp ->
+                dur = try { mp.duration } catch (_: Exception) { 0 }
+                if (mp.videoWidth > 0 && mp.videoHeight > 0) {
+                    aspect = mp.videoWidth.toFloat() / mp.videoHeight.toFloat()
+                }
+                prepared = true
+                start()
+                playing = true
+            }
+            setOnCompletionListener {
+                // 播放结束：按钮复位为播放，进度停在结尾
+                playing = false
+                pos = dur
+            }
+            setOnErrorListener { _, _, _ ->
+                failed = true
+                true
+            }
         }
-    )
+    }
+
+    Column(modifier) {
+        // ---- 画面：固定高度容器内等比缩放，任何比例都不变形、不撑爆布局 ----
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().height(220.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val a = aspect.coerceIn(0.2f, 5f)
+            var w = maxWidth
+            var h = w / a
+            if (h > maxHeight) { h = maxHeight; w = h * a }
+            AndroidView(
+                factory = { vv },
+                modifier = Modifier.size(w, h).clip(RoundedCornerShape(10.dp))
+            )
+        }
+
+        if (failed) {
+            Text(
+                "该视频无法预览播放（编码可能不受预览支持），不影响转换，可直接转换后播放结果",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else {
+            // ---- 控制条：在视频下方，任何画面比例都完整可见 ----
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    if (!prepared) return@IconButton
+                    if (playing) {
+                        try { vv.pause() } catch (_: Exception) { }
+                        playing = false
+                    } else {
+                        try {
+                            if (dur > 0 && pos >= dur - 200) vv.seekTo(0)
+                            vv.start()
+                            playing = true
+                        } catch (_: Exception) { }
+                    }
+                }) {
+                    Icon(
+                        if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = "播放/暂停",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Slider(
+                    value = if (dur > 0) pos.toFloat() else 0f,
+                    onValueChange = {
+                        pos = it.toInt()
+                        try { vv?.seekTo(it.toInt()) } catch (_: Exception) { }
+                    },
+                    valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${fmtMs(pos.toLong())} / ${fmtMs(dur.toLong())}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+
+    // 播放中轮询更新进度
+    LaunchedEffect(playing, prepared) {
+        while (playing && prepared) {
+            try { pos = vv.currentPosition } catch (_: Exception) { }
+            delay(300)
+        }
+    }
+    DisposableEffect(uri) {
+        onDispose {
+            try { vv.stopPlayback() } catch (_: Exception) { }
+        }
+    }
 }

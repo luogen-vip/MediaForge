@@ -212,8 +212,44 @@ data class VideoParams(
     val scaleW: Int = 0,
     val scaleH: Int = 0,
     val fps: Int = 0,
-    val audioBitrate: Int = 192
-)
+    val audioBitrate: Int = 192,
+    // 新增：画面比例（真实生效：裁剪填满或黑边适配，输出宽高比严格等于所选比例）
+    val ratio: Float = 0f,          // 0=保持原比例；否则为 w/h（如 16f/9f）
+    val ratioFit: String = "crop",  // crop=裁剪填满 / pad=黑边适配
+    val srcW: Int = 0,              // 源分辨率（用于计算输出尺寸）
+    val srcH: Int = 0,
+    // 新增：色彩空间（真实写入/转换，ffprobe 可验证）
+    val colorMatrix: String = "",   // ""=保持 / bt709 / bt601 / bt2020
+    val colorRange: String = ""     // ""=保持 / tv / pc
+) {
+    fun describeRatio(): String = when {
+        ratio <= 0.01f -> ""
+        else -> {
+            val label = when {
+                kotlin.math.abs(ratio - 16f / 9f) < 0.01f -> "16:9"
+                kotlin.math.abs(ratio - 9f / 16f) < 0.01f -> "9:16"
+                kotlin.math.abs(ratio - 1f) < 0.01f -> "1:1"
+                kotlin.math.abs(ratio - 4f / 3f) < 0.01f -> "4:3"
+                kotlin.math.abs(ratio - 3f / 4f) < 0.01f -> "3:4"
+                kotlin.math.abs(ratio - 3f / 2f) < 0.01f -> "3:2"
+                kotlin.math.abs(ratio - 2f / 3f) < 0.01f -> "2:3"
+                kotlin.math.abs(ratio - 21f / 9f) < 0.01f -> "21:9"
+                else -> String.format(java.util.Locale.US, "%.2f:1", ratio)
+            }
+            "比例 $label（${if (ratioFit == "pad") "黑边适配" else "裁剪填满"}）"
+        }
+    }
+
+    fun describeColor(): String {
+        if (colorMatrix.isEmpty() && colorRange.isEmpty()) return ""
+        val parts = mutableListOf<String>()
+        if (colorMatrix.isNotEmpty()) parts += when (colorMatrix) {
+            "bt601" -> "BT.601"; "bt2020" -> "BT.2020"; else -> "BT.709"
+        }
+        if (colorRange.isNotEmpty()) parts += if (colorRange == "pc") "PC 全范围" else "TV 有限范围"
+        return "色彩 ${parts.joinToString("/")}"
+    }
+}
 
 fun buildVideoArgs(input: String, output: String, p: VideoParams): List<String> {
     val a = mutableListOf("-y", "-i", input)
@@ -226,8 +262,47 @@ fun buildVideoArgs(input: String, output: String, p: VideoParams): List<String> 
         "vp9" -> a += listOf("-crf", (p.crf + 8).toString(), "-b:v", "0")
         "mpeg4" -> a += listOf("-q:v", "5")
     }
-    if (p.scaleW > 0 && p.scaleH > 0) a += listOf("-vf", "scale=${p.scaleW}:${p.scaleH}:flags=lanczos")
+
+    // ---- 滤镜链：比例裁剪/黑边 + 缩放 + 色彩空间（全部真实生效） ----
+    val vf = mutableListOf<String>()
+    if (p.ratio > 0.01f) {
+        // 容器高度 = 分辨率档位指定高度，否则用源高度；宽度 = 高度 × 比例（偶数化）
+        val baseH = if (p.scaleH > 0) p.scaleH else (if (p.srcH > 0) p.srcH else 1080)
+        val outH = if (baseH % 2 == 1) baseH + 1 else baseH
+        var outW = Math.round(outH * p.ratio).toInt()
+        if (outW % 2 == 1) outW += 1
+        outW = outW.coerceAtLeast(16)
+        if (p.ratioFit == "pad") {
+            // 黑边适配：等比缩小到容器内，居中补黑边 —— 画面完整不变形，输出严格 outW×outH
+            vf += "scale=$outW:$outH:force_original_aspect_ratio=decrease:flags=lanczos"
+            vf += "pad=$outW:$outH:(ow-iw)/2:(oh-ih)/2:black"
+        } else {
+            // 裁剪填满：等比放大铺满容器，居中裁剪 —— 无变形，输出严格 outW×outH
+            vf += "scale=$outW:$outH:force_original_aspect_ratio=increase:flags=lanczos"
+            vf += "crop=$outW:$outH"
+        }
+    } else if (p.scaleW > 0 && p.scaleH > 0) {
+        // 老分辨率档位：改为等比适配不拉伸（避免把 9:16 源拉成 16:9）
+        vf += "scale=${p.scaleW}:${p.scaleH}:force_original_aspect_ratio=decrease:flags=lanczos"
+    }
     if (p.fps > 0) a += listOf("-r", p.fps.toString())
+
+    // 色彩空间真实转换/标记（scale=out_color_matrix 做矩阵转换，输出标签写元数据）
+    if (p.colorMatrix.isNotEmpty()) {
+        vf += "scale=out_color_matrix=${p.colorMatrix}"
+        val (prim, trc) = when (p.colorMatrix) {
+            "bt601" -> "smpte170m" to "smpte170m"
+            "bt2020" -> "bt2020" to "bt2020-10"
+            else -> "bt709" to "bt709"
+        }
+        a += listOf("-colorspace", p.colorMatrix, "-color_primaries", prim, "-color_trc", trc)
+    }
+    if (p.colorRange.isNotEmpty()) {
+        vf += "scale=in_range=auto:out_range=${p.colorRange}"
+        a += listOf("-color_range", p.colorRange)
+    }
+    if (vf.isNotEmpty()) a += listOf("-vf", vf.joinToString(","))
+
     if (p.vcodec == "vp9") {
         a += listOf("-c:a", "libopus", "-b:a", "${p.audioBitrate.coerceAtMost(510)}k")
     } else {
@@ -299,3 +374,52 @@ val SPEED_LABELS = linkedMapOf(
     "slow" to "较慢（更清晰）",
     "veryslow" to "极慢（最清晰）"
 )
+
+// ---------------- 宽高比 / 色彩空间显示辅助 ----------------
+
+/** 把 宽×高 化成易读的比例（如 16:9、9:16、1:1；无法匹配时给出最简整数比或小数比） */
+fun aspectRatioText(w: Int, h: Int): String {
+    if (w <= 0 || h <= 0) return "未知"
+    val r = w.toDouble() / h
+    // 常见比例（差 2% 以内视为该比例）
+    val named = listOf(
+        "1:1" to 1.0, "4:3" to 4.0 / 3, "3:4" to 0.75,
+        "16:9" to 16.0 / 9, "9:16" to 9.0 / 16,
+        "3:2" to 1.5, "2:3" to 2.0 / 3,
+        "21:9" to 21.0 / 9, "9:21" to 9.0 / 21,
+        "5:4" to 1.25, "4:5" to 0.8,
+        "2:1" to 2.0, "1:2" to 0.5,
+        "2.35:1" to 2.35, "2.39:1" to 2.39, "1.85:1" to 1.85
+    )
+    for ((name, v) in named) {
+        if (kotlin.math.abs(r - v) / v < 0.02) return name
+    }
+    // 最简整数比
+    var a = w; var b = h
+    var x = a; var y = b
+    while (y != 0) { val t = x % y; x = y; y = t }
+    val g = if (x > 0) x else 1
+    a = w / g; b = h / g
+    return if (a <= 120 && b <= 120) "$a:$b"
+    else String.format(Locale.US, "%.2f:1", r)
+}
+
+/** FFmpeg 色彩空间矩阵 → 中文说明 */
+fun colorMatrixCn(v: String?): String = when (v?.lowercase()) {
+    null, "", "unknown" -> "未标注"
+    "bt709" -> "BT.709（高清标准）"
+    "bt470bg", "bt601", "smpte170m", "smpte170" -> "BT.601（标清）"
+    "bt2020", "bt2020c", "bt2020nc" -> "BT.2020（4K/HDR 广色域）"
+    "smpte240m" -> "SMPTE 240M"
+    "fcc" -> "FCC（早期电视）"
+    "gb r" -> "GBR（RGB 直通）"
+    else -> v ?: "未标注"
+}
+
+/** FFmpeg 色彩范围 → 中文说明 */
+fun colorRangeCn(v: String?): String = when (v?.lowercase()) {
+    null, "", "unknown" -> "未标注"
+    "tv", "mpeg" -> "TV 有限范围（16-235）"
+    "pc", "jpeg", "full" -> "PC 全范围（0-255）"
+    else -> v ?: "未标注"
+}
