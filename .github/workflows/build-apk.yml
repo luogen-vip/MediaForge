@@ -27,9 +27,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Prepare LaMa inpainting model (download + int8 quantize + verify)
+      # 模型已直接提交在 assets/（开箱即用）；此步骤仅在缺失时下载+量化兜底。
+      # onnxruntime 必须与 APP 打包的 onnxruntime-android 1.19.2 同版本，
+      # 否则量化产物手机端可能不兼容（v1.4.4 教训）
+      - name: Prepare LaMa inpainting model (skip if bundled)
         run: |
-          pip install --quiet onnxruntime onnx
+          pip install --quiet "onnxruntime==1.19.2" onnx numpy
           python scripts/prepare_model.py
 
       - name: Build APK

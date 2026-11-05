@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,9 +21,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -43,12 +46,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.logan.mediaforge.core.ConvertTask
 import com.logan.mediaforge.core.TaskKind
 import com.logan.mediaforge.core.TaskRepository
@@ -81,6 +91,8 @@ fun TasksScreen() {
     var trimFor by remember { mutableStateOf<ConvertTask?>(null) }
     var confirmDelete by remember { mutableStateOf<ConvertTask?>(null) }
     var pendingPermDownload by remember { mutableStateOf<Long?>(null) }
+    var imageViewerFor by remember { mutableStateOf<ConvertTask?>(null) }   // 图片大图查看
+    var fullscreenVideoFor by remember { mutableStateOf<ConvertTask?>(null) } // 视频全屏播放
 
     fun onResult(msg: String) {
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -126,6 +138,8 @@ fun TasksScreen() {
                         onToggleVideo = {
                             showPlayerFor = if (showPlayerFor == t.id) null else t.id
                         },
+                        onFullscreenVideo = { fullscreenVideoFor = t },
+                        onViewImage = { imageViewerFor = t },
                         onDownload = { startDownload(t.id) },
                         onRename = { renameFor = t },
                         onTrim = { trimFor = t },
@@ -264,6 +278,22 @@ fun TasksScreen() {
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("取消") } }
         )
     }
+
+    // 图片大图查看器（点击任务预览图打开，点关闭返回）
+    imageViewerFor?.let { t ->
+        val p = t.output?.absolutePath
+        if (p != null) {
+            FullImageViewer(path = p, fileName = t.downloadedName ?: t.output?.name ?: "", onDismiss = { imageViewerFor = null })
+        }
+    }
+
+    // 视频全屏播放（点击「全屏播放」打开，关闭按钮返回）
+    fullscreenVideoFor?.let { t ->
+        val out = t.output
+        if (out != null) {
+            FullscreenVideoPlayer(uri = Uri.fromFile(out), onDismiss = { fullscreenVideoFor = null })
+        }
+    }
 }
 
 private fun parseTimeSec(s: String): Double? {
@@ -286,6 +316,8 @@ private fun TaskCard(
     t: ConvertTask,
     videoPlayerVisible: Boolean,
     onToggleVideo: () -> Unit,
+    onFullscreenVideo: () -> Unit,
+    onViewImage: () -> Unit,
     onDownload: () -> Unit,
     onRename: () -> Unit,
     onTrim: () -> Unit,
@@ -327,10 +359,10 @@ private fun TaskCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (t.status == TaskStatus.COMPLETED) {
-                // 图片类任务（格式转换 / 去水印）完成后直接展示结果预览图，
-                // 用户先看到效果再决定要不要下载
+                // 图片类任务（格式转换 / 去水印 / 抠图）完成后直接展示结果预览图，
+                // 点击可查看大图；透明区域用棋盘格背景显示，一眼看清抠图/去水印效果
                 if (t.kind == TaskKind.IMAGE && t.output != null) {
-                    ResultImageThumb(path = t.output!!.absolutePath)
+                    ResultImageThumb(path = t.output!!.absolutePath, onClick = onViewImage)
                 }
                 Text(t.outputInfo, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary)
@@ -350,6 +382,7 @@ private fun TaskCard(
                     if (t.kind == TaskKind.VIDEO) {
                         AssistChip(onClick = onToggleVideo,
                             label = { Text(if (videoPlayerVisible) "收起播放" else "播放") })
+                        AssistChip(onClick = onFullscreenVideo, label = { Text("全屏播放") })
                     }
                     AssistChip(onClick = onDownload, label = { Text("下载") })
                     AssistChip(onClick = onRename, label = { Text("重命名") })
@@ -382,9 +415,11 @@ private fun TaskCard(
 /**
  * 图片任务结果预览图：后台降采样解码（不卡列表、不吃内存），
  * 固定高度容器内等比展示，极端比例的图片也不会撑爆布局。
+ * 透明区域用棋盘格背景显示（用户能直接看到抠图/去水印的透明效果）；
+ * 点击进入大图查看器。
  */
 @Composable
-private fun ResultImageThumb(path: String) {
+private fun ResultImageThumb(path: String, onClick: () -> Unit) {
     var bmp by remember(path) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(path) {
         val b = withContext(Dispatchers.IO) {
@@ -414,15 +449,158 @@ private fun ResultImageThumb(path: String) {
         ) {
             Image(
                 bitmap = b.asImageBitmap(),
-                contentDescription = "转换结果预览图",
+                contentDescription = "转换结果预览图（点击查看大图）",
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+                modifier = Modifier.fillMaxSize()
+                    .clip(RoundedCornerShape(10.dp))
+                    .checkerBackground()
+                    .clickable { onClick() }
             )
         }
         Text(
-            "转换结果预览（满意请点下方「下载」保存）",
+            "转换结果预览（透明区域以棋盘格显示）· 点击图片可查看大图 · 满意请点「下载」保存",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** 透明背景棋盘格：抠图/透明模式的结果一眼能看出哪里是真的透明 */
+private fun Modifier.checkerBackground(): Modifier = drawBehind {
+    val cell = 18f
+    var y = 0f
+    var row = 0
+    while (y < size.height) {
+        var x = 0f
+        var col = 0
+        while (x < size.width) {
+            drawRect(
+                color = if ((row + col) % 2 == 0) Color(0xFFC8C8C8) else Color(0xFFEFEFEF),
+                topLeft = Offset(x, y),
+                size = androidx.compose.ui.geometry.Size(
+                    minOf(cell, size.width - x), minOf(cell, size.height - y)
+                )
+            )
+            x += cell; col++
+        }
+        y += cell; row++
+    }
+}
+
+/** 全屏大图查看器：黑底 + 双指缩放/拖动 + 单击关闭 */
+@Composable
+private fun FullImageViewer(path: String, fileName: String, onDismiss: () -> Unit) {
+    var bmp by remember(path) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(path) {
+        val b = withContext(Dispatchers.IO) {
+            try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, o)
+                if (o.outWidth <= 0 || o.outHeight <= 0) return@withContext null
+                var sample = 1
+                while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= 2048) sample *= 2
+                BitmapFactory.decodeFile(
+                    path,
+                    BitmapFactory.Options().apply { inSampleSize = sample }
+                )
+            } catch (e: OutOfMemoryError) { null } catch (e: Exception) { null }
+        }
+        bmp = b
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        androidx.compose.material3.Surface(
+            color = Color.Black,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            var scale by remember(path) { mutableStateOf(1f) }
+            var offset by remember(path) { mutableStateOf(Offset.Zero) }
+            Box(
+                Modifier.fillMaxSize()
+                    .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null) { if (scale <= 1.01f) onDismiss() }
+            ) {
+                val b = bmp
+                if (b != null) {
+                    Image(
+                        bitmap = b.asImageBitmap(),
+                        contentDescription = "大图查看",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = scale; scaleY = scale
+                                translationX = offset.x; translationY = offset.y
+                            }
+                            .pointerInput(path) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    scale = (scale * zoom).coerceIn(1f, 6f)
+                                    offset = if (scale > 1f) offset + pan else Offset.Zero
+                                }
+                            }
+                    )
+                } else {
+                    Text(
+                        "加载中…",
+                        color = Color.White,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+                androidx.compose.material3.TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                ) { Text("关闭", color = Color.White) }
+                if (fileName.isNotEmpty()) {
+                    Text(
+                        fileName,
+                        color = Color.White.copy(alpha = 0.75f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.TopStart)
+                            .statusBarsPadding().padding(12.dp)
+                    )
+                }
+                Text(
+                    "双指缩放 · 单击空白处关闭 · 透明区域以棋盘格显示",
+                    color = Color.White.copy(alpha = 0.55f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 视频全屏播放：黑底大屏 + 播放控制，关闭按钮返回 */
+@Composable
+private fun FullscreenVideoPlayer(uri: Uri, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        androidx.compose.material3.Surface(
+            color = Color.Black,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "视频全屏播放",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    androidx.compose.material3.TextButton(onClick = onDismiss) {
+                        Text("关闭", color = Color.White)
+                    }
+                }
+                VideoPreview(uri, Modifier.fillMaxSize(), fillViewport = true)
+            }
+        }
     }
 }

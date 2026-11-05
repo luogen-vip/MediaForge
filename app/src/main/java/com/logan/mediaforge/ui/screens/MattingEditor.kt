@@ -263,6 +263,11 @@ private fun StrokeEditor(
                                     ptsBuf.clear()
                                     ptsBuf.add(toNorm(ch.position))
                                 } else if (ch.changedToUp()) {
+                                    // 原地点按（没拖动）：也算一笔涂抹，否则用户轻点水印毫无反应
+                                    activeErase = eraseMode
+                                    val stroke = InpaintEngine.Stroke(listOf(toNorm(start)), brushPct / 100f / 2f)
+                                    if (activeErase) eraseStrokes.add(stroke) else keepStrokes.add(stroke)
+                                    paintTick++
                                     break
                                 }
                             }
@@ -276,7 +281,8 @@ private fun StrokeEditor(
                             if (ch.changedToUp()) {
                                 if (started) {
                                     val pts = ptsBuf.toList()
-                                    if (pts.size >= 2) {
+                                    // 单点/短划也有效（>=1 个点即成一笔）
+                                    if (pts.isNotEmpty()) {
                                         val stroke = InpaintEngine.Stroke(pts, brushPct / 100f / 2f)
                                         if (activeErase) eraseStrokes.add(stroke) else keepStrokes.add(stroke)
                                     }
