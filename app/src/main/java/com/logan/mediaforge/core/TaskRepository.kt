@@ -264,7 +264,8 @@ object TaskRepository {
                         status = TaskStatus.RUNNING, phase = "转码中", progress = 0f
                     )
                 }
-                val out = uniqueOut(params.ext)
+                val out = uniqueOut(if (params.ext == "alac") "m4a" else params.ext)
+                // ALAC 无独立封装器，必须装进 M4A 容器（spec.notes 已说明）；文件后缀用 m4a
                 val args = buildAudioArgs(src.absolutePath, out.absolutePath, params, ts, te)
                 // 进度分母用裁剪后的有效时长（无裁剪时为源总时长），进度更准确
                 val progTotal = if (ts != null && te != null && te > ts) te - ts else total
@@ -277,7 +278,13 @@ object TaskRepository {
                     }
                     return@launch
                 }
-                verifyAndFinish(id, out, AudioFormats.byExt(params.ext)?.verifyKey ?: "")
+                // MP2 特殊：ffprobe 对 MPEG 层2 文件可能报 mp3（两者共用同一 MPEG 音频解复用器），
+                // 校验接受别名，否则 MP2 目标永远校验失败
+                val verifyKey = when (params.ext) {
+                    "mp2" -> "mp2|mp3"
+                    else -> AudioFormats.byExt(params.ext)?.verifyKey ?: ""
+                }
+                verifyAndFinish(id, out, verifyKey)
             } catch (e: Exception) {
                 fail(id, "异常：" + (e.message ?: e.javaClass.simpleName))
             }
@@ -586,7 +593,7 @@ object TaskRepository {
             fail(id, "输出校验失败：无法解析输出文件（不是有效的目标格式）")
             return
         }
-        if (verifyKey.isNotEmpty() && !info.formatName.contains(verifyKey)) {
+        if (verifyKey.isNotEmpty() && verifyKey.split('|').none { info.formatName.contains(it) }) {
             fail(id, "输出校验失败：实际容器为 ${info.formatName}，与目标格式不符")
             return
         }
@@ -630,21 +637,28 @@ object TaskRepository {
 
     fun delete(id: Long, alsoDeleteDownloaded: Boolean = false) {
         val t = _tasks.value.firstOrNull { it.id == id } ?: return
-        if (t.status == TaskStatus.RUNNING || t.status == TaskStatus.IMPORTING) cancel(id)
-        try { t.output?.delete() } catch (_: Exception) { }
-        if (alsoDeleteDownloaded && t.downloadedUri != null) {
-            try {
-                if (t.downloadedUri!!.scheme == "file") {
-                    File(t.downloadedUri!!.path ?: "").delete()
-                } else if (t.downloadedUri!!.authority == "media") {
-                    appContext.contentResolver.delete(t.downloadedUri!!, null, null)
-                } else {
-                    DocumentsContract.deleteDocument(appContext.contentResolver, t.downloadedUri!!)
-                }
-            } catch (_: Exception) { }
-        }
+        // 先把任务从列表移除（UI 立即消失，杜绝“点了删除还显示”的观感问题），
+        // 取消转码与文件删除放到后台执行，不阻塞也不依赖列表状态
         _tasks.update { it.filterNot { x -> x.id == id } }
         persist()
+        if (t.status == TaskStatus.RUNNING || t.status == TaskStatus.IMPORTING) {
+            t.sessionId?.let { sid -> try { FFmpegKit.cancel(sid) } catch (_: Exception) { } }
+        }
+        scope.launch(Dispatchers.IO) {
+            try { t.output?.delete() } catch (_: Exception) { }
+            if (alsoDeleteDownloaded && t.downloadedUri != null) {
+                try {
+                    val uri = t.downloadedUri!!
+                    if (uri.scheme == "file") {
+                        File(uri.path ?: "").delete()
+                    } else if (uri.authority == "media") {
+                        appContext.contentResolver.delete(uri, null, null)
+                    } else {
+                        DocumentsContract.deleteDocument(appContext.contentResolver, uri)
+                    }
+                } catch (_: Exception) { }
+            }
+        }
     }
 
     fun download(id: Long, onResult: (String) -> Unit) {

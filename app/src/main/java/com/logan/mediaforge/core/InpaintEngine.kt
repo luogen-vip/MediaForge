@@ -103,8 +103,12 @@ object InpaintEngine {
         val rw = (rw0 * scale).toInt().coerceAtLeast(2)
         val rh = (rh0 * scale).toInt().coerceAtLeast(2)
 
+        // 注意：当框覆盖整图时，createBitmap(src, 0,0, w, h) 对不可变位图会直接返回 src 本体，
+        // 此时绝不能 recycle roiImg，否则后面的 src.copy(...) 会抛 "Can't copy a recycled bitmap"
         val roiImg = Bitmap.createBitmap(src, rx, ry, rw0, rh0)
-        val roi = if (scale < 1f) Bitmap.createScaledBitmap(roiImg, rw, rh, true).also { roiImg.recycle() } else roiImg
+        val roi = if (scale < 1f)
+            Bitmap.createScaledBitmap(roiImg, rw, rh, true).also { if (roiImg !== src) roiImg.recycle() }
+        else roiImg
 
         // 在 ROI 分辨率上生成蒙版（白色 = 去除区域）；scale 用于坐标同步缩放
         val mask = buildMask(roi.width, roi.height, src.width, src.height, rx, ry, scale, rects, strokes)
@@ -130,8 +134,12 @@ object InpaintEngine {
         }
         onProgress(0.9f, "融合边缘")
 
-        // 结果贴回全分辨率原图（copy 第二参数必须为 true：Canvas 构造要求可变 Bitmap，
-        // 传 false 会抛 "Immutable bitmap passed to Canvas constructor"）
+        // 结果贴回全分辨率原图（copy 第二参数必须为 true：Canvas 构造要求可变 Bitmap）；
+        // src 已被意外回收时降级为从 ROI 恢复，不再抛异常
+        if (src.isRecycled) {
+            mask.recycle(); roi.recycle(); filled.recycle()
+            return null
+        }
         val result = src.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
         val drawPaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -259,7 +267,8 @@ object InpaintEngine {
         val in512 = Bitmap.createScaledBitmap(roi, si, si, true)
         val raw512 = Bitmap.createScaledBitmap(mask, si, si, true)
         val dilated = dilateMask(raw512, 3)
-        raw512.recycle()
+        // createScaledBitmap 在尺寸相同时会直接返回源 bitmap 本体，此时回收它等于回收 roi/mask
+        if (raw512 !== mask) raw512.recycle()
         onProgress(0.35f, "AI 修复中（大图首次较慢）")
 
         val area = si * si
@@ -316,7 +325,7 @@ object InpaintEngine {
         onProgress(0.8f, "融合到原图")
         val outRoi = Bitmap.createScaledBitmap(out512, roi.width, roi.height, true)
         out512.recycle()
-        in512.recycle()
+        if (in512 !== roi) in512.recycle()
         return outRoi
     }
 

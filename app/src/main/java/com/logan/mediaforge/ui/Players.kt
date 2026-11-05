@@ -37,10 +37,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.logan.mediaforge.core.fmtMs
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.FFmpegKitConfig
+import com.arthenica.ffmpegkit.ReturnCode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 
-/** 音频播放条：支持本地文件路径或 content Uri，真实播放；autoPlay=true 时准备好后自动开始 */
+/** 音频播放条：支持本地文件路径或 content Uri，真实播放；autoPlay=true 时准备好后自动开始。
+ *  系统播放器不支持的格式（AC3/WMA/AIFF/APE 等）自动用 FFmpeg 离线解码成 WAV 后预览。 */
 @Composable
 fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Boolean = false, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -49,8 +57,10 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
     var dur by remember(mediaPath, mediaUri) { mutableIntStateOf(0) }
     var ready by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     var failed by remember(mediaPath, mediaUri) { mutableStateOf(false) }
-    // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免回跳
+    var decoding by remember(mediaPath, mediaUri) { mutableStateOf(false) }  // FFmpeg 解码预览中
+    // 拖动进度条期间暂停播放与轮询，松手后一次性 seek（拖动期间不再出声，也消除音频抖动）
     var dragging by remember(mediaPath, mediaUri) { mutableStateOf(false) }
+    var resumeOnDragEnd by remember(mediaPath, mediaUri) { mutableStateOf(false) }
     // seek 异步生效期间的“挂起目标位”：播放器没追上目标前进度条保持目标位，彻底消除前后抖动
     var pendingSeek by remember(mediaPath, mediaUri) { mutableIntStateOf(-1) }
     var seekAt by remember(mediaPath, mediaUri) { mutableLongStateOf(0L) }
@@ -62,20 +72,64 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
                 playing = false
                 pos = dur
             }
+            // seek 真正完成后立即落到播放器实际位置（关键帧），避免拖住目标位再突跳
+            setOnSeekCompleteListener { mp ->
+                val ps = pendingSeek
+                if (ps >= 0) {
+                    pendingSeek = -1
+                    pos = try { mp.currentPosition } catch (_: Exception) { ps }
+                }
+            }
         }
     }
 
     LaunchedEffect(mediaPath, mediaUri) {
-        try {
-            if (mediaUri != null) player.setDataSource(context, mediaUri)
-            else if (mediaPath != null) player.setDataSource(mediaPath)
-            else return@LaunchedEffect
-            player.prepare()
-            dur = player.duration
-            ready = true
-        } catch (e: Exception) {
-            ready = false
-            failed = true
+        val path = mediaPath
+        if (mediaUri != null) {
+            try {
+                player.setDataSource(context, mediaUri)
+                player.prepare()
+                dur = player.duration
+                ready = true
+            } catch (e: Exception) {
+                failed = true
+            }
+        } else if (path != null) {
+            var ok = try {
+                player.setDataSource(path)
+                player.prepare()
+                true
+            } catch (e: Exception) {
+                try { player.reset() } catch (_: Exception) { }
+                false
+            }
+            // 系统播放器不支持（AC3/WMA/AIFF 等编码）→ FFmpeg 解码成 WAV 再预览，不额外损失音质
+            if (!ok) {
+                decoding = true
+                try {
+                    val wav = File(context.cacheDir, "mf_preview_" + kotlin.math.abs(path.hashCode().toLong()) + ".wav")
+                    val session = withContext(Dispatchers.IO) {
+                        FFmpegKit.executeWithArguments(
+                            arrayOf("-y", "-i", path, "-vn", "-c:a", "pcm_s16le", "-f", "wav", wav.absolutePath)
+                        )
+                    }
+                    if (ReturnCode.isSuccess(session.returnCode) && wav.exists() && wav.length() > 0) {
+                        ok = try {
+                            player.reset()
+                            player.setDataSource(wav.absolutePath)
+                            player.prepare()
+                            true
+                        } catch (e: Exception) { false }
+                    }
+                } catch (_: Exception) { }
+                decoding = false
+            }
+            if (ok) {
+                dur = player.duration
+                ready = true
+            } else {
+                failed = true
+            }
         }
     }
     DisposableEffect(mediaPath, mediaUri) {
@@ -132,9 +186,14 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             )
         }
         if (failed) {
-            Text("该文件无法播放",
+            Text("该格式系统播放器不支持且预览解码失败（不影响已转换的文件本身，可下载后用 VLC 等播放器播放）",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f))
+        } else if (decoding) {
+            Text("正在解码预览（该格式系统播放器不支持，正在用内置引擎离线转换）…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.weight(1f))
         } else {
             Text(fmtMs(pos.toLong()), style = MaterialTheme.typography.labelSmall,
@@ -142,13 +201,21 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
             Slider(
                 value = if (dur > 0) pos.toFloat() else 0f,
                 onValueChange = {
-                    dragging = true
+                    if (!dragging) {
+                        dragging = true
+                        resumeOnDragEnd = playing
+                        if (playing) try { player.pause() } catch (_: Exception) { }
+                    }
                     pos = it.toInt()
                 },
                 onValueChangeFinished = {
                     try { player.seekTo(pos) } catch (_: Exception) { }
                     pendingSeek = pos
                     seekAt = System.currentTimeMillis()
+                    if (resumeOnDragEnd) {
+                        try { player.start() } catch (_: Exception) { }
+                        resumeOnDragEnd = false
+                    }
                     dragging = false
                 },
                 valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),
@@ -170,17 +237,52 @@ fun AudioPlayer(mediaPath: String? = null, mediaUri: Uri? = null, autoPlay: Bool
 @Composable
 fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var aspect by remember(uri) { mutableFloatStateOf(16f / 9f) } // 视频宽/高，onPrepared 后更新
     var prepared by remember(uri) { mutableStateOf(false) }
     var playing by remember(uri) { mutableStateOf(false) }
     var pos by remember(uri) { mutableIntStateOf(0) }
     var dur by remember(uri) { mutableIntStateOf(0) }
     var failed by remember(uri) { mutableStateOf(false) }
-    // 拖动进度条期间暂停轮询与 seek，松手后一次性 seek，避免拖动后回跳
+    var remuxing by remember(uri) { mutableStateOf(false) }      // 重封装预览中
+    var remuxTried by remember(uri) { mutableStateOf(false) }
+    var remuxPath by remember(uri) { mutableStateOf<String?>(null) }
+    // 拖动进度条期间暂停播放与轮询，松手后一次性 seek（拖动期间画面不再连播，也不出声）
     var dragging by remember(uri) { mutableStateOf(false) }
+    var resumeOnDragEnd by remember(uri) { mutableStateOf(false) }
     // seek 异步生效期间的“挂起目标位”：播放器没追上目标前进度条保持目标位，彻底消除前后抖动
     var pendingSeek by remember(uri) { mutableIntStateOf(-1) }
     var seekAt by remember(uri) { mutableLongStateOf(0L) }
+
+    // 系统播放器报错时：先尝试 FFmpeg 无重编码重封装（换封装不换画质，秒级完成），
+    // 仍不行才提示不支持（不影响已转换的文件本身）
+    fun tryRemux() {
+        if (remuxTried) { failed = true; return }
+        remuxTried = true
+        remuxing = true
+        scope.launch(Dispatchers.IO) {
+            var ok = false
+            var out: File? = null
+            try {
+                val input = if (uri.scheme == "file") uri.path
+                    else FFmpegKitConfig.getSafParameterForRead(context, uri)
+                if (input != null) {
+                    val f = File(context.cacheDir, "mf_vremux_" + kotlin.math.abs(uri.toString().hashCode().toLong()) + ".mp4")
+                    f.delete()
+                    val s = FFmpegKit.executeWithArguments(
+                        arrayOf("-y", "-i", input, "-c", "copy", "-movflags", "+faststart", f.absolutePath)
+                    )
+                    ok = ReturnCode.isSuccess(s.returnCode) && f.exists() && f.length() > 0
+                    if (ok) out = f
+                }
+            } catch (_: Exception) { }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                remuxing = false
+                if (ok && out != null) remuxPath = out!!.absolutePath else failed = true
+            }
+        }
+    }
+
     val vv = remember(uri) {
         VideoView(context).apply {
             setVideoURI(uri)
@@ -198,10 +300,29 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
                 playing = false
                 pos = dur
             }
+            setOnSeekCompleteListener { mp ->
+                val ps = pendingSeek
+                if (ps >= 0) {
+                    pendingSeek = -1
+                    pos = try { mp.currentPosition } catch (_: Exception) { ps }
+                }
+            }
             setOnErrorListener { _, _, _ ->
-                failed = true
+                tryRemux()
                 true
             }
+        }
+    }
+
+    // 重封装完成后切换到重封装后的文件播放
+    LaunchedEffect(remuxPath) {
+        val p = remuxPath ?: return@LaunchedEffect
+        try {
+            vv.setVideoPath(p)
+            vv.start()
+            playing = true
+        } catch (_: Exception) {
+            failed = true
         }
     }
 
@@ -223,9 +344,15 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
 
         if (failed) {
             Text(
-                "该视频无法预览播放（编码可能不受预览支持），不影响转换，可直接转换后播放结果",
+                "该视频无法预览播放（编码可能不受系统播放器支持，重封装后仍不支持），不影响转换，可下载后用 VLC 等播放器播放",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error
+            )
+        } else if (remuxing) {
+            Text(
+                "正在重封装预览（换封装不换画质，很快）…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary
             )
         } else {
             // ---- 控制条：在视频下方，任何画面比例都完整可见 ----
@@ -252,13 +379,21 @@ fun VideoPreview(uri: Uri, modifier: Modifier = Modifier) {
                 Slider(
                     value = if (dur > 0) pos.toFloat() else 0f,
                     onValueChange = {
-                        dragging = true
+                        if (!dragging) {
+                            dragging = true
+                            resumeOnDragEnd = playing
+                            if (playing) try { vv.pause() } catch (_: Exception) { }
+                        }
                         pos = it.toInt()
                     },
                     onValueChangeFinished = {
                         try { vv?.seekTo(pos) } catch (_: Exception) { }
                         pendingSeek = pos
                         seekAt = System.currentTimeMillis()
+                        if (resumeOnDragEnd) {
+                            try { vv.start() } catch (_: Exception) { }
+                            resumeOnDragEnd = false
+                        }
                         dragging = false
                     },
                     valueRange = 0f..(if (dur > 0) dur.toFloat() else 1f),

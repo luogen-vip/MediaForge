@@ -235,8 +235,13 @@ object FileSniffer {
         if (atStr(0, "ID3")) return det("MP3（音频）", "mp3", "audio/mpeg", "AUDIO")
         if (at(0, 0xFF, 0xF1) || at(0, 0xFF, 0xF9)) return det("AAC（ADTS 音频）", "aac", "audio/aac", "AUDIO")
         if (at(0, 0xFF) && hlen >= 2 && (head[1].toInt() and 0xE0) == 0xE0 &&
-            head[1] != 0xF1.toByte() && head[1] != 0xF9.toByte())
-            return det("MP3（音频）", "mp3", "audio/mpeg", "AUDIO")
+            head[1] != 0xF1.toByte() && head[1] != 0xF9.toByte()) {
+            // MPEG 音频帧头：bit4-3=版本，bit2-1=层（01=Layer III，10=Layer II，11=Layer I）。
+            // Layer II 就是 MP2，之前一律判成 mp3 导致 MP2 目标校验永远失败
+            val layer = (head[1].toInt() shr 1) and 0x3
+            return if (layer == 2) det("MP2（音频）", "mp2", "audio/mpeg", "AUDIO")
+            else det("MP3（音频）", "mp3", "audio/mpeg", "AUDIO")
+        }
         if (atStr(0, "fLaC")) return det("FLAC（无损音频）", "flac", "audio/flac", "AUDIO")
         if (atStr(0, "OggS")) return when {
             headContains("OpusHead") -> det("OPUS（音频）", "opus", "audio/ogg", "AUDIO")
