@@ -72,6 +72,9 @@ object MattingEngine {
         val eraseF = strokeToFloat(erase, w, h)
 
         // 2. 主体蒙版
+        // 注意：必须捕获 Throwable（不只是 Exception）—— 若模型与 onnxruntime-android
+        // 版本不兼容（如含 ConvInteger），createSession 会抛 NOT_IMPLEMENTED；
+        // 某些设备的原生库异常是 Error 类型，catch Exception 会直接吞不掉导致任务失败
         val hasModel = modelAvailable(ctx)
         var engine = if (hasModel) "U2Net AI 模型" else "内置背景识别"
         var matte: FloatArray? = null
@@ -81,13 +84,15 @@ object MattingEngine {
                 runU2Net(ctx, src, onProgress)
             } catch (e: OutOfMemoryError) {
                 engine = "内置背景识别（内存不足自动切换）"; null
-            } catch (e: Exception) {
-                engine = "内置背景识别（模型异常自动切换）"; null
+            } catch (t: Throwable) {
+                engine = "内置背景识别（AI 模型加载异常自动切换）"; null
             }
         }
         if (matte == null) {
-            onProgress(0.3f, "识别背景中")
-            matte = backgroundHeuristic(src)
+            onProgress(0.3f, "识别背景中（复杂图可能需要数十秒）")
+            matte = backgroundHeuristic(src) { p ->
+                onProgress(0.3f + p * 0.25f, "识别背景中（复杂图可能需要数十秒）")
+            }
         }
         if (matte == null) return null
         onProgress(0.6f, "精修透明边缘")
@@ -220,12 +225,45 @@ object MattingEngine {
      * 从四条边界采样背景色 → 每像素与最近背景色的距离 →
      * 与边界连通的相似区域判定为背景（完全透明），其余按距离给出软过渡透明度。
      * 白衣服+白背景这类「背景色同色但被主体隔断」的情况不会被误删。
+     *
+     * 性能关键：距离计算在降采样图（长边 ≤ 900）上做，再双线性上采样回原尺寸。
+     * 全分辨率直算是 O(像素数×采样数)，千万级像素会卡几十秒（v1.4.4 "卡在30%" 的另一半原因）。
      */
-    private fun backgroundHeuristic(src: Bitmap): FloatArray? {
+    private fun backgroundHeuristic(src: Bitmap, onProgress: (Float) -> Unit = {}): FloatArray? {
         val w = src.width; val h = src.height
         if (w < 2 || h < 2) return null
+
+        // 降采样工作图（长边 ≤ 900）
+        val longSide = max(w, h)
+        val ds = if (longSide > 900) 900f / longSide else 1f
+        val dw = max(2, (w * ds).toInt())
+        val dh = max(2, (h * ds).toInt())
+        val work = if (dw == w && dh == h) src
+        else Bitmap.createScaledBitmap(src, dw, dh, true)
+        onProgress(0.15f)
+        val matteSmall = heuristicOnBitmap(work, dw, dh, onProgress)
+        if (work !== src) work.recycle()
+        if (matteSmall == null) return null
+        onProgress(0.85f)
+
+        // 上采样回原分辨率（经 ARGB 位图双线性插值，蒙版边缘自然过渡）
+        val small = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
+        val spx = IntArray(dw * dh) { i ->
+            ((matteSmall[i] * 255).toInt().coerceIn(0, 255) shl 24) or 0x00FFFFFF
+        }
+        small.setPixels(spx, 0, dw, 0, 0, dw, dh)
+        val up = Bitmap.createScaledBitmap(small, w, h, true)
+        small.recycle()
+        val upx = IntArray(w * h)
+        up.getPixels(upx, 0, w, 0, 0, w, h)
+        up.recycle()
+        return FloatArray(upx.size) { (upx[it] ushr 24) / 255f }
+    }
+
+    /** 在给定尺寸的位图上执行边界取色+泛洪（matte 尺寸 = bmp 尺寸） */
+    private fun heuristicOnBitmap(bmp: Bitmap, w: Int, h: Int, onProgress: (Float) -> Unit): FloatArray? {
         val px = IntArray(w * h)
-        src.getPixels(px, 0, w, 0, 0, w, h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
 
         // 边界采样（跳过完全透明像素：透明本身也算背景信号）
         val samples = ArrayList<Int>(512)
@@ -237,6 +275,7 @@ object MattingEngine {
         for (y in 0 until h step step) { addSample(0, y); addSample(w - 1, y) }
 
         // 距离图（与最近边界采样的欧氏距离，透明采样距离恒为 0）
+        onProgress(0.3f)
         val dist = FloatArray(w * h)
         val transparentBg = BooleanArray(w * h)
         for (i in px.indices) {
@@ -249,12 +288,13 @@ object MattingEngine {
                 val sa = s ushr 24
                 if (sa < 32) continue   // 透明采样与不透明像素不算同色
                 val dr = (s shr 16 and 0xFF) - r; val dg = (s shr 8 and 0xFF) - g; val db = (s and 0xFF) - b
-                val d = sqrt((dr * dr + dg * dg + db * db).toFloat())
+                val d = (dr * dr + dg * dg + db * db).toFloat()
                 if (d < best) best = d
             }
-            if (best == Float.MAX_VALUE) best = 255f
-            dist[i] = best
+            if (best == Float.MAX_VALUE) best = 255f * 255f
+            dist[i] = sqrt(best)
         }
+        onProgress(0.6f)
 
         // 泛洪：与边界连通的近背景区域 = 确定背景
         val bg = BooleanArray(w * h)
@@ -273,6 +313,7 @@ object MattingEngine {
             if (y > 0) trySeed(x, y - 1)
             if (y < h - 1) trySeed(x, y + 1)
         }
+        onProgress(0.75f)
 
         val matte = FloatArray(w * h)
         for (i in px.indices) {
@@ -355,10 +396,19 @@ object MattingEngine {
 
     // ==================== 工具函数 ====================
 
-    /** 涂抹笔刷 → 全分辨率羽化浮点蒙版（0..1），无笔画返回 null */
+    /** 涂抹笔刷 → 羽化浮点蒙版（0..1），无笔画返回 null。
+     *  在长边 ≤ 2048 的工作分辨率上光栅化再上采样：
+     *  全分辨率浮点运算在千万像素图上要吃 200MB+ 临时内存（低内存设备必 OOM），且慢。 */
     private fun strokeToFloat(strokes: List<Stroke>, w: Int, h: Int): FloatArray? {
         if (strokes.isEmpty() || w <= 1 || h <= 1) return null
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+
+        // 工作分辨率（长边 ≤ 2048）
+        val longSide = max(w, h)
+        val ds = if (longSide > 2048) 2048f / longSide else 1f
+        val dw = max(2, (w * ds).toInt())
+        val dh = max(2, (h * ds).toInt())
+
+        val bmp = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.WHITE }
         val sp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -368,31 +418,44 @@ object MattingEngine {
         var any = false
         for (s in strokes) {
             if (s.pts.isEmpty()) continue
-            val half = s.halfWidthFrac.coerceIn(0.001f, 0.2f) * w
+            val half = s.halfWidthFrac.coerceIn(0.001f, 0.2f) * dw
             if (s.pts.size == 1) {
-                c.drawCircle(s.pts[0].first * w, s.pts[0].second * h, half, p)
+                c.drawCircle(s.pts[0].first * dw, s.pts[0].second * dh, half, p)
                 any = true
             } else {
                 sp.strokeWidth = half * 2f
                 val path = Path()
-                path.moveTo(s.pts[0].first * w, s.pts[0].second * h)
+                path.moveTo(s.pts[0].first * dw, s.pts[0].second * dh)
                 for (i in 1 until s.pts.size) {
-                    val x = s.pts[i].first * w; val y = s.pts[i].second * h
-                    val mx = (s.pts[i - 1].first * w + x) / 2f
-                    val my = (s.pts[i - 1].second * h + y) / 2f
-                    path.quadTo(s.pts[i - 1].first * w, s.pts[i - 1].second * h, mx, my)
+                    val x = s.pts[i].first * dw; val y = s.pts[i].second * dh
+                    val mx = (s.pts[i - 1].first * dw + x) / 2f
+                    val my = (s.pts[i - 1].second * dh + y) / 2f
+                    path.quadTo(s.pts[i - 1].first * dw, s.pts[i - 1].second * dh, mx, my)
                 }
-                path.lineTo(s.pts.last().first * w, s.pts.last().second * h)
+                path.lineTo(s.pts.last().first * dw, s.pts.last().second * dh)
                 c.drawPath(path, sp)
                 any = true
             }
         }
         if (!any) { bmp.recycle(); return null }
-        val px = IntArray(w * h)
-        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val px = IntArray(dw * dh)
+        bmp.getPixels(px, 0, dw, 0, 0, dw, dh)
         bmp.recycle()
-        val f = FloatArray(w * h) { (px[it] ushr 24) / 255f }
-        return boxBlurF(f, w, h, 4, 2)
+        val f = FloatArray(dw * dh) { (px[it] ushr 24) / 255f }
+        val small = boxBlurF(f, dw, dh, 4, 2)
+
+        // 上采样回原分辨率
+        val smallBmp = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
+        val spx = IntArray(dw * dh) { i ->
+            ((small[i] * 255).toInt().coerceIn(0, 255) shl 24) or 0x00FFFFFF
+        }
+        smallBmp.setPixels(spx, 0, dw, 0, 0, dw, dh)
+        val up = Bitmap.createScaledBitmap(smallBmp, w, h, true)
+        smallBmp.recycle()
+        val upx = IntArray(w * h)
+        up.getPixels(upx, 0, w, 0, 0, w, h)
+        up.recycle()
+        return FloatArray(upx.size) { (upx[it] ushr 24) / 255f }
     }
 
     /** 盒滤波模糊（水平+垂直分离，多轮） */
